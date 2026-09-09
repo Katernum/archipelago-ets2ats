@@ -39,10 +39,24 @@ money values and calls `apply_money_delta`.
   wrote `money_account: 535000`, left everything else in the file untouched, and created a
   timestamped backup before writing.
 
-**Still open** (deferred to a later milestone, needs the live game to test): confirming
-`telemetry_watcher` actually fires on a real in-game delivery, and running `/sync` against
-a real save produced by that flow. The synthetic test above exercises the same code path
-but isn't a substitute for that live confirmation.
+**Live confirmation (real game, real save)**: delivered a real job on the Mod Test
+profile -- `telemetry_watcher` logged `jobDelivered -> checking 'Delivery #1'
+(revenue=1832)`, the server filled it and handed back `50,000 Bundle`, and the client
+queued it (`RECEIVED ITEM: 50,000 Bundle ... -- queued, run /sync to apply`). Other
+telemetry events fired during the same session (fines, job start, a discovered city) were
+correctly ignored -- only `jobDelivered` drives a check, as designed. After backing out to
+the main menu (autosave confirmed via the freshly-rewritten `save/autosave/game.sii`),
+applying the queued item brought `money_account` from `987513840` to `987563840` -- a
++50,000 delta wrote correctly -- and the in-game balance after clicking Continue matched
+exactly. This closes out the one thing Milestone 4 hadn't yet proven live: telemetry
+detection and the save-file sync both work against the real game, not just synthetic
+tests.
+
+One clarification that came up during the live test, worth keeping: the main-menu
+requirement only applies to the *write* side (applying queued items to the save).
+Telemetry-driven check detection is read-only and has no such restriction -- checks fire
+instantly during live gameplay, exactly per the hybrid notification/deferred-effect UX
+already chosen; only the deferred item application needs to wait for a safe moment.
 
 **One environment pitfall hit**: running `client.py` by absolute path from inside the
 Archipelago checkout directory (`cd checkout && py <path>\client.py`) still failed with
