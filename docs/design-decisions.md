@@ -2,6 +2,48 @@
 
 Findings from feasibility research, preserved here so they don't only live in chat history.
 
+## Milestone roadmap update (post-Milestone 4)
+
+Scoping pass for milestones 5-7 after Milestone 4's live confirmation. Two changes from the
+original build plan (`docs` didn't exist yet when that plan was written, so recording the
+change here):
+
+**Reordered 6 and 7.** Originally: overlay (5) -> content mod (6) -> full apworld design (7).
+Now: overlay (5) -> full apworld design (6) -> content mod (7). Reasoning: the content mod's
+job is to supply whatever shop items the real game design (garage/truck/part unlocks, etc.)
+decides it needs -- building it first meant guessing at an item list before the design that
+determines it exists. Design first, then author content to match.
+
+**Milestone 6 (full apworld design) scope: broad, not narrow.** Chosen over a
+deliveries-and-money-only first pass -- the full original vision (deliveries, city discovery,
+garage/truck/part unlocks, XP-rate boosts via `g_exp_gain`, fines-as-traps, ETS2/ATS/both
+options) is the target for the first real design, accepting more upfront design work in
+exchange for matching the original ambition rather than needing a second design pass later.
+
+**Milestone 5 (overlay/tracker UI) notification approach**, settled after working through the
+actual constraints:
+- Native OS toast notifications (the obvious first idea) are undermined by Windows Focus
+  Assist / Game Mode, which routinely suppresses toasts specifically while a game has focus --
+  exactly the moment this needs to notify the player.
+- A true in-game overlay (rendered inside the game's own frame, like ReShade/Special
+  K/Discord's overlay) requires DLL injection and hooking the game's DirectX `Present()` call.
+  This is a substantial standalone technical effort, out of proportion to what Milestone 5
+  needs to ship -- flagged as a possible future enhancement, not committed to now.
+- **Chosen approach**: a transparent, click-through, always-on-top desktop window drawn in a
+  screen corner. No process injection -- it's just a normal win32 layered window
+  (`WS_EX_LAYERED` + `WS_EX_TRANSPARENT` + topmost) that visually sits on top of the game via
+  the desktop compositor. This works as long as the game runs in **Borderless Windowed** mode
+  (already our standing recommendation for streaming, per Milestone 4-era discussion) but is
+  invisible in true exclusive Fullscreen mode, where the desktop compositor is bypassed
+  entirely. A toast notification is kept as a best-effort fallback for exclusive-fullscreen
+  players (better than nothing, even if Focus Assist sometimes eats it).
+- Stack: `pystray` (background tray icon + right-click menu), the transparent overlay window
+  for in-corner alerts, a small `tkinter` popup (opened from the tray icon) for the dashboard
+  (connection status, live check feed, pending item count, manual Sync button). Chosen over
+  PySide6/Qt specifically to stay dependency-light and avoid a second, heavier window
+  competing with the game for focus/rendering -- matches the low-end-hardware/streaming
+  concerns raised early in this project's design discussion.
+
 ## Milestone 4 result: real telemetry-driven checks + save-file item sync confirmed
 
 Replaced the Milestone 3 placeholder world with a still-small but *real* slice: three
