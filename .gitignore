@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+*.log
+
+# Real save-file/profile data copied in for testing must never be committed
+prototypes/samples/
+*.sii.bak
