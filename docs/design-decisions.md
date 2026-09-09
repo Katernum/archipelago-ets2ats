@@ -2,6 +2,55 @@
 
 Findings from feasibility research, preserved here so they don't only live in chat history.
 
+## Milestone 4 result: real telemetry-driven checks + save-file item sync confirmed
+
+Replaced the Milestone 3 placeholder world with a still-small but *real* slice: three
+`Delivery #N` locations that check off actual `special_b.jobDelivered` rising edges from
+live SCS telemetry (bridge/telemetry/), and three money-bundle items applied to a real
+save's `bank.money_account` field via the exact mechanism Milestone 0/1 proved safe
+(bridge/sync/apply_items.py). Renamed the world from "ETS2ATS Test" to "ETS2ATS" to mark
+the shift away from pure plumbing -- still not the full Milestone 7 design (one flat
+region, no access rules), but no longer fake data either.
+
+Chose money over a truck-part/vehicle-unlock item for this milestone deliberately: money
+edits are the mechanism already proven end-to-end, while vehicle ownership lives in save
+structures (garage/dealer records) we haven't mapped yet. Using an unproven mechanism here
+would have made this milestone a bad test of the wiring itself.
+
+`bridge/ap_client/client.py`'s `telemetry_watcher` coroutine runs alongside the existing
+AP network loop: it attaches to the SCS shared memory (retrying every 5s if the game/plugin
+isn't up yet, since that must never crash the client), edge-detects `jobDelivered`, and
+maps each successive delivery to the next `Delivery #N` location via `check_locations`.
+Received items are queued (and persisted to `pending_items.json`, so a client restart
+doesn't lose them) rather than applied immediately -- the player runs the new `/sync <path
+to game.sii>` command once they're back at the main menu, which sums the queued items'
+money values and calls `apply_money_delta`.
+
+**Confirmed working**:
+- `Generate.py` accepted the real slice (3 locations, 3 items) without error.
+- A local `MultiServer.py` + the updated client reproduced the same connect/auth flow
+  proven in Milestone 3 (the network mechanism itself didn't change, only what triggers a
+  check and what happens on receipt).
+- The client survives telemetry being unavailable (game not running) without crashing --
+  `telemetry_watcher` just retries silently, confirmed by leaving the client connected
+  with no game running.
+- `apply_money_delta` was verified directly against a synthetic save: given
+  `money_account: 500000` and a simulated 35,000 total from two queued items, it correctly
+  wrote `money_account: 535000`, left everything else in the file untouched, and created a
+  timestamped backup before writing.
+
+**Still open** (deferred to a later milestone, needs the live game to test): confirming
+`telemetry_watcher` actually fires on a real in-game delivery, and running `/sync` against
+a real save produced by that flow. The synthetic test above exercises the same code path
+but isn't a substitute for that live confirmation.
+
+**One environment pitfall hit**: running `client.py` by absolute path from inside the
+Archipelago checkout directory (`cd checkout && py <path>\client.py`) still failed with
+`ModuleNotFoundError: No module named 'ModuleUpdate'` -- Python sets `sys.path[0]` to the
+*script's own* directory when invoked by path, not the process's cwd, so being "in" the
+checkout directory doesn't help. Fixed by setting `PYTHONPATH` to the checkout root
+explicitly rather than relying on cwd.
+
 ## Milestone 3 result: full AP round trip confirmed (generate -> server -> client -> item)
 
 Cloned `ArchipelagoMW/Archipelago` as a separate, non-committed dev checkout at

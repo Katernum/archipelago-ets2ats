@@ -1,15 +1,13 @@
 """
-Milestone 3 placeholder apworld: the smallest possible world (3 locations, 3 items, one
-region, no access rules) purely to prove the Archipelago generation/server/client plumbing
-works end-to-end, independent of any real game integration.
+Milestone 4 real slice: still a tiny stub world (not the full Milestone 7 design), but now
+backed by real game mechanics instead of pure plumbing placeholders --
 
-This is NOT the real ETS2/ATS design (that's Milestone 7) -- it exists so Milestone 3 can
-validate: generate a multiworld with this game -> run a local server -> connect a client
-built on CommonClient -> send a LocationChecks -> receive a ReceivedItems.
+- Locations check off real telemetry events (`special_b.jobDelivered` rising edges read from
+  the SCS shared-memory map, see bridge/telemetry/), one location per delivery in order.
+- Items are money bundles applied to a real save file's `bank.money_account` field (the exact
+  mechanism proven safe in Milestone 0/1), via bridge/sync/apply_items.py.
 
-Modeled on the official APQuest tutorial world (worlds/apquest in the Archipelago repo),
-condensed into one file since there's no real game logic yet to justify splitting into
-items.py/locations.py/regions.py/rules.py.
+Still one flat region, no access rules -- that's still deferred to Milestone 7.
 """
 
 from __future__ import annotations
@@ -19,35 +17,35 @@ from typing import Any
 from BaseClasses import Item, ItemClassification, Location, Region
 from worlds.AutoWorld import World
 
-GAME_NAME = "ETS2ATS Test"
+GAME_NAME = "ETS2ATS"
 
-ITEM_NAME_TO_ID = {
-    "Progressive Truck": 1,
-    "Money Bundle": 2,
+ITEM_MONEY_VALUES = {
+    "10,000 Bundle": 10_000,
+    "25,000 Bundle": 25_000,
+    "50,000 Bundle": 50_000,
 }
+
+ITEM_NAME_TO_ID = {name: i + 1 for i, name in enumerate(ITEM_MONEY_VALUES)}
 
 LOCATION_NAME_TO_ID = {
-    "Deliver Job A": 1,
-    "Deliver Job B": 2,
-    "Deliver Job C": 3,
+    "Delivery #1": 1,
+    "Delivery #2": 2,
+    "Delivery #3": 3,
 }
 
-ITEM_CLASSIFICATIONS = {
-    "Progressive Truck": ItemClassification.progression,
-    "Money Bundle": ItemClassification.filler,
-}
+ITEM_CLASSIFICATIONS = {name: ItemClassification.filler for name in ITEM_MONEY_VALUES}
 
 
-class Ets2AtsTestItem(Item):
+class Ets2AtsItem(Item):
     game = GAME_NAME
 
 
-class Ets2AtsTestLocation(Location):
+class Ets2AtsLocation(Location):
     game = GAME_NAME
 
 
-class Ets2AtsTestWorld(World):
-    """Minimal placeholder world for validating the Archipelago plumbing (Milestone 3)."""
+class Ets2AtsWorld(World):
+    """Milestone 4 slice: real telemetry-driven locations, real save-file-applied items."""
 
     game = GAME_NAME
     item_name_to_id = ITEM_NAME_TO_ID
@@ -56,21 +54,16 @@ class Ets2AtsTestWorld(World):
     def create_regions(self) -> None:
         menu = Region("Menu", self.player, self.multiworld)
         self.multiworld.regions.append(menu)
-        menu.add_locations(LOCATION_NAME_TO_ID, Ets2AtsTestLocation)
+        menu.add_locations(LOCATION_NAME_TO_ID, Ets2AtsLocation)
 
     def create_items(self) -> None:
-        pool = [
-            self.create_item("Progressive Truck"),
-            self.create_item("Money Bundle"),
-            self.create_item("Money Bundle"),
-        ]
-        self.multiworld.itempool += pool
+        self.multiworld.itempool += [self.create_item(name) for name in ITEM_MONEY_VALUES]
 
-    def create_item(self, name: str) -> Ets2AtsTestItem:
-        return Ets2AtsTestItem(name, ITEM_CLASSIFICATIONS[name], ITEM_NAME_TO_ID[name], self.player)
+    def create_item(self, name: str) -> Ets2AtsItem:
+        return Ets2AtsItem(name, ITEM_CLASSIFICATIONS[name], ITEM_NAME_TO_ID[name], self.player)
 
     def get_filler_item_name(self) -> str:
-        return "Money Bundle"
+        return "10,000 Bundle"
 
     def fill_slot_data(self) -> dict[str, Any]:
         return {}

@@ -9,3 +9,8 @@ venv/
 # Real save-file/profile data copied in for testing must never be committed
 prototypes/samples/
 *.sii.bak
+*.sii.pre-ap-sync-*
+*.sii.orig-encrypted-*
+
+# Runtime state, not source
+bridge/ap_client/pending_items.json
