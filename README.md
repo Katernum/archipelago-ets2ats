@@ -3,6 +3,16 @@
 A bridge/mod that lets Euro Truck Simulator 2 and American Truck Simulator be played as an
 [Archipelago](https://archipelago.gg) multiworld randomizer game.
 
+## Why Claude
+
+Thanks to my wonderful college and work, I'm highly trained in the world of C, RedShift, and 
+all the fun things associated. Python was not one of the things they put much care into. As such,
+most of the build needs to be written by someone that knows the deep intricacies of python. And
+since my work involves testing Claude architecture, and I get copious amounts of free tokens, we're
+going to see how different prompt designs create codebases on Sonnet 5 High. I know enough to be able
+to troubleshoot the code and write a decent chunk myself, but I'm using this as an excuse to do work
+as well as not setting my ETS on fire.
+
 ## Status
 
 Early prototyping. See [docs/design-decisions.md](docs/design-decisions.md) for the architecture
