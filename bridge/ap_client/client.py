@@ -124,13 +124,28 @@ async def perform_sync(ctx: Ets2AtsContext, explicit_path: Path | None) -> None:
         game = ctx.last_seen_game or "ets2"
         save_path = profile_paths.find_profile_save(game, ctx.auth or "")
         if save_path is None:
-            report(f"No profile named {ctx.auth!r} found -- falling back to the most "
-                    "recently modified save. Rename your profile to match your slot name "
-                    "to fix this.")
-            save_path = profile_paths.find_any_recent_save(game)
-    if save_path is None:
-        report("Could not locate a save file to sync. Use /sync <path> to specify one.")
-        return
+            # No exact profile-name match -- this is a guess, not the mechanism the player
+            # set up (renaming their profile to match their slot name). Applying a wrong
+            # guess would silently corrupt someone else's real save, so it requires an
+            # explicit yes rather than proceeding quietly.
+            fallback = profile_paths.find_any_recent_save(game)
+            if fallback is None:
+                report("Could not locate a save file to sync. Use /sync <path> to specify one.")
+                return
+            if ctx.tracker_ui is None:
+                report(f"No profile named {ctx.auth!r} found, and no UI is available to "
+                        "confirm a fallback. Use /sync <path> to specify one explicitly.")
+                return
+            confirmed = await asyncio.wrap_future(ctx.tracker_ui.confirm(
+                f"No profile named {ctx.auth!r} found.\n\n"
+                f"Apply {len(ctx.pending_items)} pending item(s) to the most recently "
+                f"modified save instead?\n\n{fallback}\n\n"
+                "Rename your profile to match your slot name to avoid seeing this."
+            ))
+            if not confirmed:
+                report("Sync cancelled -- no changes made.")
+                return
+            save_path = fallback
 
     total = sum(ITEM_MONEY_VALUES[name] for name in ctx.pending_items)
     try:

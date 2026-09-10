@@ -49,6 +49,25 @@ mode to be visible over the game (see roadmap notes below) -- not exercised in t
 session since no game was running; the tray icon and dashboard don't have that limitation
 since they aren't drawn over the game's surface.
 
+### Follow-up: confirm before touching a guessed save file
+
+User-suggested safety fix after the above testing: the fallback path (no profile name
+matches the slot name) was applying items to "the most recently modified save" immediately,
+with only a log message -- silently correct in testing because the fallback happened to
+guess right, but there's nothing stopping it from guessing a *different* real profile's save
+on a machine with more than one. Changed `perform_sync` to require an explicit yes via a new
+`UI.confirm()` before ever writing through the fallback path; the exact profile-name match
+still applies with no prompt, since that path is exactly what the player set up on purpose.
+
+**One more dialog-visibility bug caught while verifying the fix**: the first implementation
+used `tkinter.messagebox.askyesno`, which never became visible in testing -- it's parented to
+`ui.py`'s root window, which stays permanently withdrawn (it only exists to anchor the
+mainloop), and a messagebox attached to a withdrawn parent did not reliably raise itself
+above other windows on Windows. Fixed by building a plain `Toplevel` instead
+(`bridge/overlay/confirm_dialog.py`), the same way the already-confirmed-working overlay
+notification window is built: explicit `-topmost`, plus `lift()`/`focus_force()` before
+blocking on `wait_window()`. Confirmed visible and answerable end to end afterward.
+
 ## Milestone roadmap update (post-Milestone 4)
 
 Scoping pass for milestones 5-7 after Milestone 4's live confirmation. Two changes from the

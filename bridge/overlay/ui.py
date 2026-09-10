@@ -11,8 +11,10 @@ from __future__ import annotations
 import queue
 import threading
 import tkinter as tk
+from concurrent.futures import Future
 from typing import Callable
 
+from .confirm_dialog import ask_yes_no
 from .dashboard import Dashboard
 from .notifier import OverlayNotifier
 from .tray import start_tray
@@ -40,6 +42,14 @@ class UI:
     def set_pending(self, names: list[str]) -> None:
         self._events.put(("pending", names))
 
+    def confirm(self, message: str) -> Future:
+        """Ask a yes/no question on the UI thread; safe to await from asyncio via
+        `await asyncio.wrap_future(ui.confirm(...))`. Used to gate risky actions (like
+        applying items to a save file we only *guessed* at) behind an explicit yes."""
+        future: Future = Future()
+        self._events.put(("confirm", (message, future)))
+        return future
+
     def stop(self) -> None:
         self._events.put(("quit", None))
 
@@ -63,6 +73,9 @@ class UI:
                         dashboard.set_status(payload)
                     elif kind == "pending":
                         dashboard.set_pending(payload)
+                    elif kind == "confirm":
+                        message, future = payload
+                        future.set_result(ask_yes_no(root, "Confirm Sync", message))
                     elif kind == "quit":
                         self._on_quit()
                         tray.stop()
