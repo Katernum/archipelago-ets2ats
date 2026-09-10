@@ -11,6 +11,7 @@ prototypes/samples/
 *.sii.bak
 *.sii.pre-ap-sync-*
 *.sii.orig-encrypted-*
+*.sii.pre-m6-spike-*
 
 # Runtime state, not source
 bridge/ap_client/pending_items.json
