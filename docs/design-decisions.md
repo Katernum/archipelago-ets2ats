@@ -2,6 +2,53 @@
 
 Findings from feasibility research, preserved here so they don't only live in chat history.
 
+## Milestone 5 result: tray + overlay + dashboard, launched via the AP ecosystem itself
+
+Built `bridge/overlay/` (tray icon, transparent corner-notification window, dashboard popup)
+per the plan settled in the roadmap update below, and wired it into `bridge/ap_client/
+client.py` alongside the existing telemetry watcher. Also registered the client as an
+Archipelago Launcher `Component` (`apworld/ets2ats/__init__.py`) so it appears as "ETS2ATS
+Client" in the same Launcher app used for any other AP game -- no command line needed. Also
+implemented the very first architecture idea raised for this whole project:
+`bridge/sync/profile_paths.py` matches the AP slot name to the ETS2/ATS profile name
+(profile folders are the uppercase hex of their UTF-8 display name, confirmed against real
+profiles) to auto-locate the save for Sync Now, falling back to "most recently modified save
+across all profiles" with a warning when no profile matches.
+
+**Two real bugs caught during testing, both worth remembering**:
+1. **`ctx.ui` collides with a name CommonContext already reserves.** Assigning our overlay
+   object to `Ets2AtsContext.ui` silently replaced CommonContext's own (normally `None`,
+   since we never call `run_gui()`) reference to its Kivy-based GUI object. This produced no
+   error until `CommonClient.py`'s `server_loop` actually hit its reconnect path and called
+   `ctx.ui.update_address_bar(...)`, crashing with `AttributeError: 'UI' object has no
+   attribute 'update_address_bar'` -- a latent bug that only surfaces on connection loss, not
+   on the happy path. Fixed by renaming ours to `ctx.tracker_ui`. Lesson: don't assume an
+   attribute name is free just because the base class doesn't document it -- check for it
+   directly (`grep self\.<name>` in the base class) before adding new state to a subclass of
+   a large, actively-used framework class.
+2. **The tray's Quit option never told the owning app to quit.** `UI`'s internal "quit" event
+   handler tore down its own Tk mainloop and tray icon but never called the `on_quit`
+   callback passed in from outside -- caught by a standalone test asserting Quit produced a
+   `'quit'` event, which it didn't (`events captured: ['sync']`, no `'quit'`). Uncaught, this
+   would have left the AP connection and telemetry watcher running invisibly forever after a
+   player thought they'd quit. Fixed by calling `self._on_quit()` in the quit branch before
+   tearing down the UI thread.
+
+**Confirmed working end to end**, via the actual Launcher component invocation path (not a
+shortcut around it): `comp.run('--connect', ..., '--name', 'Tester')` -- matching exactly
+what `ArchipelagoLauncher.exe "ETS2ATS Client"` would do -- connected cleanly, the tray icon
+and dashboard came up, and clicking "Sync Now" from the tray correctly fell back to "most
+recently modified save" (since the test slot name "Tester" doesn't match the real profile
+name "Mod Test") and applied a real queued item to the real save
+(`987563840 -> 987613840`). Directly verified the primary (non-fallback) path separately:
+`find_profile_save("ets2", "Mod Test")` resolves straight to the same real save file with no
+warning, confirming slot-name-matches-profile-name sync works as designed.
+
+**Known limitation, not a bug**: the transparent overlay window requires Borderless Windowed
+mode to be visible over the game (see roadmap notes below) -- not exercised in this test
+session since no game was running; the tray icon and dashboard don't have that limitation
+since they aren't drawn over the game's surface.
+
 ## Milestone roadmap update (post-Milestone 4)
 
 Scoping pass for milestones 5-7 after Milestone 4's live confirmation. Two changes from the

@@ -40,3 +40,7 @@ checks are detected and shown live, items are queued and applied in player-paced
 
 - Python 3.11.9–3.13 (matches Archipelago's supported range). On this machine, invoke via `py`,
   not `python` (the bare `python` command resolves to the Windows Store stub alias).
+- `pip install -r requirements.txt` for `bridge/`'s own dependencies (save-file crypto,
+  telemetry, tray/overlay UI). Running `bridge/ap_client/client.py` also needs a separate
+  Archipelago source checkout on `PYTHONPATH` for `CommonClient.py`/`worlds/` — see
+  docs/design-decisions.md.

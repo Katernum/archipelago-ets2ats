@@ -1,0 +1,9 @@
+# Dependencies for bridge/ (save-file crypto, telemetry, tray/overlay UI).
+# Archipelago's own dependencies (websockets, kivy, etc.) are managed by the separate
+# Archipelago source checkout used for dev/testing -- see docs/design-decisions.md -- and
+# are NOT listed here; that checkout's own requirements.txt is authoritative for those,
+# including the websockets==13.1 pin noted there.
+
+pycryptodome
+pystray
+Pillow
