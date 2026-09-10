@@ -3,7 +3,16 @@
 The real location/item/rules design, scoped after Milestone 5. Distinct from
 `docs/design-decisions.md` (technical findings/pitfalls) -- this is the actual game spec,
 grounded in real fields found in a live save file (see "Save-file findings" below) rather
-than assumption. Nothing here is implemented yet; this is the target for Milestone 6's build.
+than assumption.
+
+**Implemented and confirmed working** (see "Implementation notes" at the bottom for what was
+actually built and a real bug caught along the way) via a full generate -> host -> connect
+round trip against the real Mod Test profile's save: the save-poller correctly detected all 4
+pre-existing visited cities and 3 pre-existing dealer unlocks on first connect, sent real
+checks for each, received a real mix of Money Bundle/XP Grant items back, and `apply_deltas`
+correctly applied a combined money+XP sync in one pass. Not yet confirmed live: telemetry-
+driven distance milestones and any of the four goal types (all reuse already-proven detection
+paths, but haven't been exercised against a real drive).
 
 ## Core structure
 
@@ -125,14 +134,39 @@ before reading/writing it, since two units can plausibly share a name-adjacent r
 
 Sources: [Unlocking truck dealerships :: Euro Truck Simulator 2 General Discussions](https://steamcommunity.com/app/227300/discussions/0/2566438792572116584/?l=english), [ETS2 Truck Dealers Guide: Unlock, Visit, and Buy Safely | ETS2Hub](https://www.ets2hub.com/guides/ets2-truck-dealers-guide)
 
-## Not yet built (this document is design only)
+## Implementation notes
 
-- Save-file poller (city discovery, dealer unlocks, money/XP goal detection) -- a new
-  component alongside the existing live telemetry watcher.
-- DLC-detection helper script.
-- `apworld/ets2ats/options.py` (goal type + per-goal thresholds + DLC toggles) -- the apworld
-  is currently one flat `__init__.py`; this is likely the point where it needs to split into
-  modules (options.py/locations.py/items.py/rules.py), matching the official APQuest tutorial
-  shape referenced back in Milestone 3.
-- Victory location + `completion_condition` wiring.
-- Stat-milestone tracking (distance/XP/delivery-count running totals) in the bridge client.
+The apworld split into `options.py`/`items.py`/`locations.py`/`rules.py` per the tutorial
+shape (Milestones 3-5 kept everything in one file since there was no real design yet to
+justify splitting it). `location_name_to_id`/`item_name_to_id` are the full static universe
+across every option combination (e.g. `Delivery #1`..`Delivery #100`, even though a given
+seed only ever activates `delivery_location_count` of them) -- Archipelago requires this
+table to be stable regardless of a specific seed's options.
+
+**One real bug caught**: the first attempt at the Victory location crashed `Main.py`'s
+`write_multidata` with `AssertionError: item code None should be event, location.address
+should then also be None`. An event item (`code=None`, used so the "Victory" item is never
+actually sent over the network) must be placed on a location that is *also* a pure event
+location (`address=None`), not a normal numbered one -- confirmed against how the `adventure`
+world's own "Chalice Home" final location is defined (`LocationData(..., None, event=True)`).
+Fixed by constructing the Victory location with `address=None` directly rather than pulling a
+real ID from `LOCATION_NAME_TO_ID`.
+
+The save-poller (`bridge/sync/save_poller.py`'s `read_tracked_fields`, polled every 20s by
+`client.py`'s `save_poller` task) and the telemetry watcher are intentionally asymmetric in
+one way: the save-poller never prompts for confirmation on a profile-name mismatch (unlike
+Sync/`apply_deltas`), because it's read-only -- misattributing a discovery to the wrong
+profile is a minor logical mismatch, not a corruption risk, so it just logs a warning once and
+falls back silently. Confirmation is reserved for the one operation that actually writes.
+
+On first connect, the save-poller treats every already-satisfied condition in the save
+(cities already visited, dealers already unlocked before this AP session even started) as
+newly discovered and checks it immediately -- confirmed in testing (see above). This is
+intentional, not a bug to guard against: it matches the standing assumption that the ETS2
+profile is dedicated to this AP run (the very first architecture idea raised for this whole
+project), so any progress already on that profile legitimately counts.
+
+DLC toggles (`options.py`) and the DLC-detection helper script are still not built -- the
+location pool is the small curated starter-city list regardless of these options' values (see
+above). ATS support, and confirming the `dlc_balkan_e`/`dlc_balkan_w` naming against SCS's own
+docs, remain open.

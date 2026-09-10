@@ -1,13 +1,8 @@
 """
-Milestone 4 real slice: still a tiny stub world (not the full Milestone 7 design), but now
-backed by real game mechanics instead of pure plumbing placeholders --
-
-- Locations check off real telemetry events (`special_b.jobDelivered` rising edges read from
-  the SCS shared-memory map, see bridge/telemetry/), one location per delivery in order.
-- Items are money bundles applied to a real save file's `bank.money_account` field (the exact
-  mechanism proven safe in Milestone 0/1), via bridge/sync/apply_items.py.
-
-Still one flat region, no access rules -- that's still deferred to Milestone 7.
+Milestone 6: the real ETS2/ATS design, per docs/game-design.md. Split into modules matching
+the official APQuest tutorial shape (options/items/locations/rules), now that there's enough
+real design to justify it -- Milestones 3-5 kept everything in this one file since it was
+pure plumbing/placeholder content.
 """
 
 from __future__ import annotations
@@ -16,10 +11,33 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from BaseClasses import Item, ItemClassification, Location, Region
+from BaseClasses import ItemClassification, Region
 from worlds.AutoWorld import World
 from worlds.LauncherComponents import Component, Type, components
 from worlds.LauncherComponents import launch as launch_component
+
+from .items import (
+    FILLER_WEIGHTS,
+    ITEM_CLASSIFICATIONS,
+    ITEM_NAME_TO_ID,
+    MONEY_ITEM_VALUES,
+    XP_ITEM_VALUES,
+    Ets2AtsItem,
+)
+from .locations import (
+    CITY_DISCOVERED_LOCATIONS,
+    DEALER_UNLOCKED_LOCATIONS,
+    DISTANCE_LOCATIONS,
+    DISTANCE_MILESTONES_KM,
+    LOCATION_NAME_TO_ID,
+    STARTER_CITIES,
+    VICTORY_LOCATION,
+    XP_LOCATIONS,
+    XP_MILESTONES,
+    Ets2AtsLocation,
+)
+from .options import Ets2AtsOptions
+from .rules import set_rules
 
 # Dev-only: prototypes/sync_apworld.py drops this marker when copying this folder into an
 # Archipelago checkout, so `launch_client` below can find bridge/ next door in this repo
@@ -41,51 +59,66 @@ components.append(Component("ETS2ATS Client", func=launch_client, component_type
 
 GAME_NAME = "ETS2ATS"
 
-ITEM_MONEY_VALUES = {
-    "10,000 Bundle": 10_000,
-    "25,000 Bundle": 25_000,
-    "50,000 Bundle": 50_000,
-}
-
-ITEM_NAME_TO_ID = {name: i + 1 for i, name in enumerate(ITEM_MONEY_VALUES)}
-
-LOCATION_NAME_TO_ID = {
-    "Delivery #1": 1,
-    "Delivery #2": 2,
-    "Delivery #3": 3,
-}
-
-ITEM_CLASSIFICATIONS = {name: ItemClassification.filler for name in ITEM_MONEY_VALUES}
-
-
-class Ets2AtsItem(Item):
-    game = GAME_NAME
-
-
-class Ets2AtsLocation(Location):
-    game = GAME_NAME
+GOAL_TYPE_NAMES = ["flawless_long_haul", "money_target", "delivery_count", "xp_amount"]
 
 
 class Ets2AtsWorld(World):
-    """Milestone 4 slice: real telemetry-driven locations, real save-file-applied items."""
+    """The real ETS2/ATS design: deliveries, city/dealer discovery, and stat milestones as
+    locations; money, XP, and fines as items; a player-selectable goal condition."""
 
     game = GAME_NAME
+    options_dataclass = Ets2AtsOptions
+    options: Ets2AtsOptions
     item_name_to_id = ITEM_NAME_TO_ID
     location_name_to_id = LOCATION_NAME_TO_ID
 
     def create_regions(self) -> None:
         menu = Region("Menu", self.player, self.multiworld)
         self.multiworld.regions.append(menu)
-        menu.add_locations(LOCATION_NAME_TO_ID, Ets2AtsLocation)
+
+        delivery_names = [
+            f"Delivery #{n}" for n in range(1, self.options.delivery_location_count.value + 1)
+        ]
+        active_names = (
+            delivery_names + CITY_DISCOVERED_LOCATIONS + DEALER_UNLOCKED_LOCATIONS
+            + DISTANCE_LOCATIONS + XP_LOCATIONS
+        )
+        menu.add_locations({name: LOCATION_NAME_TO_ID[name] for name in active_names}, Ets2AtsLocation)
+
+        # address=None: a pure event location, not a networked one -- required to pair with
+        # the code=None event item placed on it below (see locations.py).
+        victory = Ets2AtsLocation(self.player, VICTORY_LOCATION, None, menu)
+        menu.locations.append(victory)
+        victory.place_locked_item(
+            Ets2AtsItem("Victory", ItemClassification.progression, None, self.player)
+        )
+
+        set_rules(self)
 
     def create_items(self) -> None:
-        self.multiworld.itempool += [self.create_item(name) for name in ITEM_MONEY_VALUES]
+        location_count = len(self.multiworld.get_unfilled_locations(self.player))
+        chosen = self.random.choices(
+            list(FILLER_WEIGHTS), weights=list(FILLER_WEIGHTS.values()), k=location_count
+        )
+        self.multiworld.itempool += [self.create_item(name) for name in chosen]
 
     def create_item(self, name: str) -> Ets2AtsItem:
         return Ets2AtsItem(name, ITEM_CLASSIFICATIONS[name], ITEM_NAME_TO_ID[name], self.player)
 
     def get_filler_item_name(self) -> str:
-        return "10,000 Bundle"
+        return self.random.choices(list(FILLER_WEIGHTS), weights=list(FILLER_WEIGHTS.values()))[0]
 
     def fill_slot_data(self) -> dict[str, Any]:
-        return {}
+        return {
+            "goal_type": GOAL_TYPE_NAMES[self.options.goal_type.value],
+            "goal_distance_km": self.options.goal_distance_km.value,
+            "goal_max_damage_pct": self.options.goal_max_damage_pct.value,
+            "goal_money": self.options.goal_money.value,
+            "goal_delivery_count": self.options.goal_delivery_count.value,
+            "goal_xp": self.options.goal_xp.value,
+            "starter_cities": STARTER_CITIES,
+            "distance_milestones_km": DISTANCE_MILESTONES_KM,
+            "xp_milestones": XP_MILESTONES,
+            "money_item_values": MONEY_ITEM_VALUES,
+            "xp_item_values": XP_ITEM_VALUES,
+        }

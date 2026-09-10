@@ -1,16 +1,15 @@
 """
-Milestone 5: bundle everything into one launch -- the AP network client, the telemetry
-watcher, and now the tray icon + transparent overlay + dashboard (bridge/overlay/) -- and
-expose a `launch()` entry point registrable as an Archipelago Launcher Component (see
-apworld/ets2ats/__init__.py), so a player never runs a command line at all: one click in the
-Launcher they already use for any other game's client brings up the whole stack.
+Milestone 6: real telemetry- and save-based checks (deliveries, city discovery, dealer
+unlocks, distance/XP milestones), real items (money, XP, fines), and player-selectable goal
+detection, layered on top of the Milestone 5 tray/overlay/dashboard/Launcher plumbing.
 
-Items are still applied on the player's own schedule (the "hybrid: instant notification,
-deferred effect" UX), but Sync Now (tray menu or dashboard button) no longer needs a manual
-path -- bridge/sync/profile_paths.py locates the save from the AP slot name, matching it to
-the ETS2/ATS profile name (falling back to "most recently modified save" with a warning if
-no profile matches). `/sync [path]` remains as a manual CLI override for when that heuristic
-picks the wrong file.
+Two independent watcher tasks feed checks, matching the two detection mechanisms established
+in docs/game-design.md: `telemetry_watcher` handles anything with a live shared-memory event
+(deliveries, distance accumulated per delivery), `save_poller` handles anything that only
+exists in the save file (city discovery, dealer unlocks, money, XP) by periodically
+re-reading and diffing it. The save poller is read-only, so unlike Sync it never needs the
+main-menu precondition or a confirmation prompt -- reading the wrong profile by mistake just
+misattributes a discovery, it can't corrupt anything.
 
 Must be run from within an Archipelago source checkout (needs CommonClient.py, NetUtils.py,
 worlds/ets2ats, etc. importable) -- this repo doesn't vendor them.
@@ -24,7 +23,6 @@ import asyncio
 import ctypes
 import json
 import sys
-import typing
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -36,26 +34,32 @@ ModuleUpdate.update()
 
 import Utils
 from CommonClient import ClientCommandProcessor, CommonContext, get_base_parser, logger, server_loop
-from worlds.ets2ats import GAME_NAME, ITEM_MONEY_VALUES, LOCATION_NAME_TO_ID
+from NetUtils import ClientStatus
+from worlds.ets2ats import GAME_NAME
+from worlds.ets2ats.items import MONEY_ITEM_VALUES, XP_ITEM_VALUES
+from worlds.ets2ats.locations import DISTANCE_MILESTONES_KM, LOCATION_NAME_TO_ID, STARTER_CITIES, XP_MILESTONES
 
 from bridge.overlay.ui import UI
 from bridge.sync import profile_paths
-from bridge.sync.apply_items import apply_money_delta
+from bridge.sync.apply_items import apply_deltas
+from bridge.sync.save_poller import read_tracked_fields
 from bridge.telemetry.shared_memory_map import MMF_NAME, MMF_SIZE, ScsTelemetryMap
 from bridge.telemetry.win_mmf import ExistingFileMapping
 
 TELEMETRY_POLL_HZ = 10
+SAVE_POLL_SECONDS = 20
 PENDING_ITEMS_FILE = Path(__file__).parent / "pending_items.json"
 TELEMETRY_GAME_NAMES = {1: "ets2", 2: "ats"}
+CITY_ID_TO_NAME = dict(STARTER_CITIES)
 
 
 class Ets2AtsClientCommandProcessor(ClientCommandProcessor):
     ctx: "Ets2AtsContext"
 
     def _cmd_sync(self, save_path: str = "") -> bool:
-        """Apply all pending received items to a save file's bank balance (auto-detects the
-        save from your slot name if no path is given). Do this at the main menu, not
-        mid-session (see docs/design-decisions.md, Milestone 0)."""
+        """Apply all pending received items to a save file's bank/XP (auto-detects the save
+        from your slot name if no path is given). Do this at the main menu, not mid-session
+        (see docs/design-decisions.md, Milestone 0)."""
         explicit = Path(save_path) if save_path else None
         Utils.async_start(perform_sync(self.ctx, explicit))
         return True
@@ -69,8 +73,16 @@ class Ets2AtsContext(CommonContext):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.delivery_count = 0
+        self.cumulative_distance_km = 0.0
+        self.distance_milestones_sent: set[int] = set()
+        self.xp_milestones_sent: set[int] = set()
+        self.visited_cities_seen: set[str] = set()
+        self.unlocked_dealers_seen: set[str] = set()
         self.pending_items: list[str] = self.load_pending()
         self.last_seen_game: str | None = None
+        self.goal_type: str | None = None
+        self.goal_params: dict = {}
+        self.goal_sent = False
         # NOTE: deliberately not named `self.ui` -- CommonContext reserves that name for its
         # own (Kivy-based) GUI object and checks `if self.ui:` internally (e.g. server_loop's
         # reconnect handling); overwriting it here broke that with no error until the
@@ -95,6 +107,9 @@ class Ets2AtsContext(CommonContext):
     def on_package(self, cmd: str, args: dict) -> None:
         if cmd == "Connected":
             logger.info(f"Connected as slot {self.slot} in team {self.team}.")
+            slot_data = args.get("slot_data", {})
+            self.goal_type = slot_data.get("goal_type")
+            self.goal_params = slot_data
             if self.tracker_ui:
                 self.tracker_ui.set_status(f"Connected as {self.auth} (slot {self.slot})")
         elif cmd == "ReceivedItems":
@@ -147,14 +162,23 @@ async def perform_sync(ctx: Ets2AtsContext, explicit_path: Path | None) -> None:
                 return
             save_path = fallback
 
-    total = sum(ITEM_MONEY_VALUES[name] for name in ctx.pending_items)
+    money_delta = sum(MONEY_ITEM_VALUES[name] for name in ctx.pending_items if name in MONEY_ITEM_VALUES)
+    xp_delta = sum(XP_ITEM_VALUES[name] for name in ctx.pending_items if name in XP_ITEM_VALUES)
+
     try:
-        old, new = apply_money_delta(save_path, total)
+        results = apply_deltas(save_path, money_delta=money_delta, xp_delta=xp_delta)
     except Exception as exc:
         report(f"Sync failed: {exc}")
         return
 
-    report(f"Synced {len(ctx.pending_items)} item(s) (+{total}): {old} -> {new}. "
+    parts = []
+    if "money" in results:
+        old, new = results["money"]
+        parts.append(f"money {old} -> {new}")
+    if "xp" in results:
+        old, new = results["xp"]
+        parts.append(f"XP {old} -> {new}")
+    report(f"Synced {len(ctx.pending_items)} item(s): {', '.join(parts)}. "
            "Click Continue on that profile.")
     ctx.pending_items.clear()
     ctx.save_pending()
@@ -162,8 +186,21 @@ async def perform_sync(ctx: Ets2AtsContext, explicit_path: Path | None) -> None:
         ctx.tracker_ui.set_pending([])
 
 
+async def report_goal_complete(ctx: Ets2AtsContext) -> None:
+    if ctx.goal_sent:
+        return
+    ctx.goal_sent = True
+    ctx.finished_game = True
+    logger.info("[goal] condition met -- reporting CLIENT_GOAL.")
+    if ctx.tracker_ui:
+        ctx.tracker_ui.notify("Goal complete!")
+    await ctx.send_msgs([{"cmd": "StatusUpdate", "status": ClientStatus.CLIENT_GOAL}])
+
+
 async def telemetry_watcher(ctx: Ets2AtsContext) -> None:
-    """Poll SCS shared memory; turn real jobDelivered edges into LocationChecks."""
+    """Poll SCS shared memory for anything with a live event: jobDelivered edges drive
+    Delivery #N locations, distance milestones, and two of the four goal types (flawless
+    long-haul, delivery count)."""
     mm: ExistingFileMapping | None = None
     prev_delivered = False
 
@@ -184,24 +221,120 @@ async def telemetry_watcher(ctx: Ets2AtsContext) -> None:
 
         delivered = bool(snap.special_b.jobDelivered)
         if delivered and not prev_delivered:
+            distance_km = snap.gameplay_f.jobDeliveredDistanceKm
+            damage_pct = snap.gameplay_f.jobDeliveredCargoDamage * 100.0
+
             ctx.delivery_count += 1
             location_name = f"Delivery #{ctx.delivery_count}"
             location_id = LOCATION_NAME_TO_ID.get(location_name)
             if location_id is not None:
                 logger.info(f"[telemetry] jobDelivered -> checking {location_name!r} "
-                            f"(revenue={snap.gameplay_ll.jobDeliveredRevenue})")
+                            f"(distance={distance_km:.1f}km damage={damage_pct:.1f}%)")
                 if ctx.tracker_ui:
                     ctx.tracker_ui.notify(f"Check: {location_name}")
                 await ctx.check_locations([location_id])
-            else:
-                logger.info(f"[telemetry] jobDelivered detected, but all "
-                            f"{len(LOCATION_NAME_TO_ID)} delivery locations are checked.")
-        prev_delivered = delivered
 
+            ctx.cumulative_distance_km += distance_km
+            for threshold in DISTANCE_MILESTONES_KM:
+                if threshold in ctx.distance_milestones_sent or ctx.cumulative_distance_km < threshold:
+                    continue
+                ctx.distance_milestones_sent.add(threshold)
+                stat_location = f"Drive {threshold:,} km"
+                stat_id = LOCATION_NAME_TO_ID.get(stat_location)
+                if stat_id is not None:
+                    logger.info(f"[telemetry] distance milestone -> checking {stat_location!r}")
+                    if ctx.tracker_ui:
+                        ctx.tracker_ui.notify(f"Check: {stat_location}")
+                    await ctx.check_locations([stat_id])
+
+            if ctx.goal_type == "flawless_long_haul" and not ctx.goal_sent:
+                if (distance_km >= ctx.goal_params.get("goal_distance_km", float("inf"))
+                        and damage_pct <= ctx.goal_params.get("goal_max_damage_pct", 0)):
+                    await report_goal_complete(ctx)
+            elif ctx.goal_type == "delivery_count" and not ctx.goal_sent:
+                if ctx.delivery_count >= ctx.goal_params.get("goal_delivery_count", float("inf")):
+                    await report_goal_complete(ctx)
+
+        prev_delivered = delivered
         await asyncio.sleep(1.0 / TELEMETRY_POLL_HZ)
 
     if mm is not None:
         mm.close()
+
+
+async def save_poller(ctx: Ets2AtsContext) -> None:
+    """Periodically re-read the active save for anything with no live telemetry event: city
+    discovery, dealer unlocks, XP milestones, and the two save-only goal types (money target,
+    XP amount). Read-only -- no main-menu precondition, no confirmation prompt."""
+    warned_no_profile_match = False
+
+    while not ctx.exit_event.is_set():
+        await asyncio.sleep(SAVE_POLL_SECONDS)
+
+        game = ctx.last_seen_game or "ets2"
+        save_path = profile_paths.find_profile_save(game, ctx.auth or "")
+        if save_path is None:
+            save_path = profile_paths.find_any_recent_save(game)
+            if save_path is not None and not warned_no_profile_match:
+                warned_no_profile_match = True
+                logger.info(f"[save-poll] No profile named {ctx.auth!r} found -- reading "
+                            "the most recently modified save instead. Rename your profile "
+                            "to match your slot name to fix this.")
+        if save_path is None:
+            continue
+
+        try:
+            fields = read_tracked_fields(save_path)
+        except Exception as exc:
+            logger.info(f"[save-poll] Could not read {save_path}: {exc}")
+            continue
+
+        new_cities = fields.visited_cities - ctx.visited_cities_seen
+        ctx.visited_cities_seen |= fields.visited_cities
+        for city_id in new_cities:
+            name = CITY_ID_TO_NAME.get(city_id)
+            if name is None:
+                continue
+            location_name = f"City Discovered: {name}"
+            location_id = LOCATION_NAME_TO_ID.get(location_name)
+            if location_id is not None:
+                logger.info(f"[save-poll] {city_id} newly visited -> checking {location_name!r}")
+                if ctx.tracker_ui:
+                    ctx.tracker_ui.notify(f"Check: {location_name}")
+                await ctx.check_locations([location_id])
+
+        new_dealers = fields.unlocked_dealers - ctx.unlocked_dealers_seen
+        ctx.unlocked_dealers_seen |= fields.unlocked_dealers
+        for city_id in new_dealers:
+            name = CITY_ID_TO_NAME.get(city_id)
+            if name is None:
+                continue
+            location_name = f"Dealer Unlocked: {name}"
+            location_id = LOCATION_NAME_TO_ID.get(location_name)
+            if location_id is not None:
+                logger.info(f"[save-poll] {city_id} dealer newly unlocked -> checking {location_name!r}")
+                if ctx.tracker_ui:
+                    ctx.tracker_ui.notify(f"Check: {location_name}")
+                await ctx.check_locations([location_id])
+
+        for threshold in XP_MILESTONES:
+            if threshold in ctx.xp_milestones_sent or fields.xp < threshold:
+                continue
+            ctx.xp_milestones_sent.add(threshold)
+            location_name = f"Earn {threshold:,} XP"
+            location_id = LOCATION_NAME_TO_ID.get(location_name)
+            if location_id is not None:
+                logger.info(f"[save-poll] XP milestone -> checking {location_name!r}")
+                if ctx.tracker_ui:
+                    ctx.tracker_ui.notify(f"Check: {location_name}")
+                await ctx.check_locations([location_id])
+
+        if ctx.goal_type == "money_target" and not ctx.goal_sent:
+            if fields.money >= ctx.goal_params.get("goal_money", float("inf")):
+                await report_goal_complete(ctx)
+        elif ctx.goal_type == "xp_amount" and not ctx.goal_sent:
+            if fields.xp >= ctx.goal_params.get("goal_xp", float("inf")):
+                await report_goal_complete(ctx)
 
 
 def _start_ui(ctx: Ets2AtsContext, loop: asyncio.AbstractEventLoop) -> UI:
@@ -229,6 +362,7 @@ async def main_async(args) -> None:
     ctx.tracker_ui.set_pending(ctx.pending_items)
 
     asyncio.create_task(telemetry_watcher(ctx), name="telemetry watcher")
+    asyncio.create_task(save_poller(ctx), name="save poller")
 
     await ctx.exit_event.wait()
     ctx.server_address = None
@@ -240,7 +374,7 @@ async def main_async(args) -> None:
 def launch(*args: str) -> None:
     """Entry point for the Archipelago Launcher component (apworld/ets2ats/__init__.py) --
     also used by the __main__ block below for direct CLI invocation."""
-    parser = get_base_parser(description="ETS2ATS client (telemetry checks, tray + overlay, /sync items).")
+    parser = get_base_parser(description="ETS2ATS client (telemetry+save checks, tray + overlay, /sync items).")
     parser.add_argument("--name", default=None, help="Slot name (skips the interactive prompt).")
     cli_args = parser.parse_args(list(args) if args else None)
     Utils.init_logging("ETS2ATSClient")
