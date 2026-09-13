@@ -48,7 +48,7 @@ from bridge.telemetry.win_mmf import ExistingFileMapping
 
 TELEMETRY_POLL_HZ = 10
 SAVE_POLL_SECONDS = 20
-PENDING_ITEMS_FILE = Path(__file__).parent / "pending_items.json"
+SYNC_STATE_FILE = Path(__file__).parent / "sync_state.json"
 TELEMETRY_GAME_NAMES = {1: "ets2", 2: "ats"}
 CITY_ID_TO_NAME = dict(STARTER_CITIES)
 
@@ -78,7 +78,12 @@ class Ets2AtsContext(CommonContext):
         self.xp_milestones_sent: set[int] = set()
         self.visited_cities_seen: set[str] = set()
         self.unlocked_dealers_seen: set[str] = set()
-        self.pending_items: list[str] = self.load_pending()
+        # How many of self.items_received (CommonContext's own authoritative, reconnect-safe
+        # list) have already been applied to a save via Sync. Deliberately NOT a list of item
+        # names we append to ourselves -- the server resends a player's FULL item history on
+        # every reconnect (see CommonClient.py's ReceivedItems handling), so anything we
+        # already applied last session would otherwise get queued and double-applied again.
+        self.items_applied_count: int = self.load_sync_state()
         self.last_seen_game: str | None = None
         self.goal_type: str | None = None
         self.goal_params: dict = {}
@@ -90,13 +95,19 @@ class Ets2AtsContext(CommonContext):
         self.tracker_ui: UI | None = None  # set once the asyncio loop is running, see main_async
 
     @staticmethod
-    def load_pending() -> list[str]:
-        if PENDING_ITEMS_FILE.exists():
-            return json.loads(PENDING_ITEMS_FILE.read_text())
-        return []
+    def load_sync_state() -> int:
+        if SYNC_STATE_FILE.exists():
+            return json.loads(SYNC_STATE_FILE.read_text()).get("items_applied_count", 0)
+        return 0
 
-    def save_pending(self) -> None:
-        PENDING_ITEMS_FILE.write_text(json.dumps(self.pending_items))
+    def save_sync_state(self) -> None:
+        SYNC_STATE_FILE.write_text(json.dumps({"items_applied_count": self.items_applied_count}))
+
+    def pending_item_names(self) -> list[str]:
+        """Items received but not yet applied via Sync -- a slice of the authoritative
+        self.items_received, not a separately-maintained list (see items_applied_count)."""
+        pending = self.items_received[self.items_applied_count:]
+        return [self.item_names.lookup_in_game(item.item, self.game) for item in pending]
 
     async def server_auth(self, password_requested: bool = False) -> None:
         if password_requested and not self.password:
@@ -113,15 +124,17 @@ class Ets2AtsContext(CommonContext):
             if self.tracker_ui:
                 self.tracker_ui.set_status(f"Connected as {self.auth} (slot {self.slot})")
         elif cmd == "ReceivedItems":
+            # self.items_received is already up to date by the time on_package runs
+            # (CommonClient.py's process_server_cmd updates it before calling on_package) --
+            # this is purely a live-notification reaction, not bookkeeping.
             for item in args["items"]:
                 item_name = self.item_names.lookup_in_game(item.item, self.game)
                 logger.info(f"RECEIVED ITEM: {item_name} (from location {item.location}, "
                             f"player {item.player}) -- queued, run /sync to apply.")
-                self.pending_items.append(item_name)
                 if self.tracker_ui:
                     self.tracker_ui.notify(f"Item received: {item_name} -- Sync when ready")
-                    self.tracker_ui.set_pending(self.pending_items)
-            self.save_pending()
+            if self.tracker_ui:
+                self.tracker_ui.set_pending(self.pending_item_names())
 
 
 async def perform_sync(ctx: Ets2AtsContext, explicit_path: Path | None) -> None:
@@ -130,7 +143,9 @@ async def perform_sync(ctx: Ets2AtsContext, explicit_path: Path | None) -> None:
         if ctx.tracker_ui:
             ctx.tracker_ui.notify(text)
 
-    if not ctx.pending_items:
+    pending_count = len(ctx.items_received) - ctx.items_applied_count
+    pending_names = ctx.pending_item_names()
+    if pending_count <= 0:
         report("No pending items to sync.")
         return
 
@@ -153,7 +168,7 @@ async def perform_sync(ctx: Ets2AtsContext, explicit_path: Path | None) -> None:
                 return
             confirmed = await asyncio.wrap_future(ctx.tracker_ui.confirm(
                 f"No profile named {ctx.auth!r} found.\n\n"
-                f"Apply {len(ctx.pending_items)} pending item(s) to the most recently "
+                f"Apply {pending_count} pending item(s) to the most recently "
                 f"modified save instead?\n\n{fallback}\n\n"
                 "Rename your profile to match your slot name to avoid seeing this."
             ))
@@ -162,8 +177,8 @@ async def perform_sync(ctx: Ets2AtsContext, explicit_path: Path | None) -> None:
                 return
             save_path = fallback
 
-    money_delta = sum(MONEY_ITEM_VALUES[name] for name in ctx.pending_items if name in MONEY_ITEM_VALUES)
-    xp_delta = sum(XP_ITEM_VALUES[name] for name in ctx.pending_items if name in XP_ITEM_VALUES)
+    money_delta = sum(MONEY_ITEM_VALUES[name] for name in pending_names if name in MONEY_ITEM_VALUES)
+    xp_delta = sum(XP_ITEM_VALUES[name] for name in pending_names if name in XP_ITEM_VALUES)
 
     try:
         results = apply_deltas(save_path, money_delta=money_delta, xp_delta=xp_delta)
@@ -178,10 +193,10 @@ async def perform_sync(ctx: Ets2AtsContext, explicit_path: Path | None) -> None:
     if "xp" in results:
         old, new = results["xp"]
         parts.append(f"XP {old} -> {new}")
-    report(f"Synced {len(ctx.pending_items)} item(s): {', '.join(parts)}. "
+    report(f"Synced {pending_count} item(s): {', '.join(parts)}. "
            "Click Continue on that profile.")
-    ctx.pending_items.clear()
-    ctx.save_pending()
+    ctx.items_applied_count = len(ctx.items_received)
+    ctx.save_sync_state()
     if ctx.tracker_ui:
         ctx.tracker_ui.set_pending([])
 
@@ -359,7 +374,6 @@ async def main_async(args) -> None:
     ctx.run_cli()
 
     ctx.tracker_ui = _start_ui(ctx, asyncio.get_running_loop())
-    ctx.tracker_ui.set_pending(ctx.pending_items)
 
     asyncio.create_task(telemetry_watcher(ctx), name="telemetry watcher")
     asyncio.create_task(save_poller(ctx), name="save poller")

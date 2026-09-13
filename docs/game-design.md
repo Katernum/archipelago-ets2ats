@@ -191,3 +191,23 @@ DLC toggles (`options.py`) and the DLC-detection helper script are still not bui
 location pool is the small curated starter-city list regardless of these options' values (see
 above). ATS support, and confirming the `dlc_balkan_e`/`dlc_balkan_w` naming against SCS's own
 docs, remain open.
+
+### A second real bug, caught before it could bite: double-applying items on reconnect
+
+The original design tracked pending items as a plain list the client appended to on every
+`ReceivedItems` packet, persisted to `pending_items.json`. This is wrong: Archipelago resends
+a player's **full item history** on every reconnect (`CommonClient.py`'s `ReceivedItems`
+handler rebuilds `ctx.items_received` from `index=0` whenever a client reconnects), not just
+items received since the client was last open. A client that already applied those items to
+the save in a previous session would see them arrive again, re-queue them, and double-apply
+them on the next Sync -- silently duplicating money/XP with no error to signal it.
+
+Caught before running a second live test against a multiworld with existing check history
+(exactly the scenario that would have triggered it). Fixed by tracking a single integer,
+`items_applied_count`, instead of a separately-maintained item list: `ctx.items_received` is
+CommonContext's own authoritative, reconnect-safe list (confirmed by reading
+`process_server_cmd` -- it fully rebuilds `items_received` before calling `on_package`, so
+relying on it there is safe), and "pending" is simply
+`ctx.items_received[ctx.items_applied_count:]`. Sync advances the counter to
+`len(ctx.items_received)` on success rather than clearing a list. Persisted to
+`sync_state.json` (renamed from `pending_items.json` to reflect what it actually stores).
