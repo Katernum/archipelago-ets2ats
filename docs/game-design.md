@@ -6,13 +6,28 @@ grounded in real fields found in a live save file (see "Save-file findings" belo
 than assumption.
 
 **Implemented and confirmed working** (see "Implementation notes" at the bottom for what was
-actually built and a real bug caught along the way) via a full generate -> host -> connect
+actually built and two real bugs caught along the way) via a full generate -> host -> connect
 round trip against the real Mod Test profile's save: the save-poller correctly detected all 4
 pre-existing visited cities and 3 pre-existing dealer unlocks on first connect, sent real
 checks for each, received a real mix of Money Bundle/XP Grant items back, and `apply_deltas`
-correctly applied a combined money+XP sync in one pass. Not yet confirmed live: telemetry-
-driven distance milestones and any of the four goal types (all reuse already-proven detection
-paths, but haven't been exercised against a real drive).
+correctly applied a combined money+XP sync in one pass. A real live delivery then confirmed
+the telemetry-driven side too: `Delivery #1` fired correctly (215km, 0% damage) and money from
+the actual in-game payout appeared in the save independent of anything AP-granted. Not yet
+confirmed live: distance milestones (no delivery so far has crossed the 500km first
+threshold) or any of the four goal types.
+
+**`g_exp_gain` suppression confirmed working, with a notable side effect worth recording**:
+isolating just that one delivery's own contribution (XP immediately before minus immediately
+after, with no Sync in between), it added only +235 XP naturally -- consistent with heavy
+suppression at `g_exp_gain "0.01"`. Separately, two Syncs
+in the same session applied a combined +5,000 XP from AP items, taking total XP to 5,815 and
+granting 6 skill points at once. This is expected, not a bug: ETS2 recalculates level/skill
+points from total `experience_points` regardless of source, and early levels need
+comparatively little XP each, so a concentrated lump-sum grant crossing several thresholds at
+once is the natural result of suppressing the slow/steady natural path in favor of AP grants
+-- exactly the intended effect (natural play alone can no longer reliably level up a
+character; reaching hazmat/long-haul/just-in-time cargo access now depends on receiving
+checks from other players, not solo grinding).
 
 ## Core structure
 
