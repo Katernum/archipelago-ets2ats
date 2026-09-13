@@ -55,6 +55,27 @@ default), and `garage.<city>.status` has no confirmed-safe semantics or known si
 Both stay deferred to Milestone 7, where real custom content (not vanilla trucks) would need
 its own gating mechanism anyway.
 
+### Follow-up: suppressing natural XP gain (`g_exp_gain`)
+
+To make XP Grant items matter rather than being a minor bonus on top of normal leveling, the
+`g_exp_gain` config.cfg cvar (the multiplier on how fast the game itself grants XP from normal
+play -- distinct from `experience_points`, which XP Grant items edit directly and which this
+multiplier has no effect on) can be set near zero, making AP-granted XP the dominant way to
+level up. Considered and rejected going further (gating specific cargo types like hazmat/
+fragile/high-value behind skill-point thresholds as real access rules) for this pass: that
+would need real research first (the exact skill-point save structure and per-job unlock
+thresholds aren't confirmed, only that `experience_points` itself is a plain writable field),
+whereas the simple version needs nothing beyond a config.cfg writer.
+
+Built `bridge/sync/config_cfg.py` for this -- distinct from `sii_format.py` since config.cfg
+is a flat, order-independent list of `uset <key> "<value>"` lines (confirmed CRLF throughout
+on a real installation), not a nested unit structure. **Important caveat**: config.cfg is
+installation-wide, not per-profile like a save file -- setting `g_exp_gain` here suppresses
+XP gain on every profile on this install, not just one dedicated to an AP run, until it's
+reset back. Confirmed working: `g_exp_gain` was unset on this installation (`get_cvar`
+returned `None`); `set_cvar` appended `uset g_exp_gain "0.01"` and created a timestamped
+backup, matching the same backup-before-write discipline as every other edit in this project.
+
 ## Goal (player-selectable, one per seed)
 
 A `Choice` option lets the player pick which win condition applies to their world -- deliberately
