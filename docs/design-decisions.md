@@ -2,6 +2,30 @@
 
 Findings from feasibility research, preserved here so they don't only live in chat history.
 
+## Reliability bug: telemetry silently reading a dead mapping after a game restart
+
+Caught during Milestone 6 live testing. A player delivered a job (including a ferry leg) that
+never registered as a check -- `telemetry_watcher` had silently stopped detecting anything.
+Root cause: the game process had been closed and relaunched partway through the test session
+(confirmed via `Get-Process`: the client had been running since 14:05, the game's current
+process had a start time of 16:53). Windows keeps a named shared memory mapping's data alive
+for as long as *any* process still holds a handle/view to it -- including ours -- even after
+the process that originally created it (the game) exits. `telemetry_watcher` only ever
+attempts to (re)attach when it doesn't currently hold a handle at all, so once it successfully
+attached once, it never re-validated that the mapping was still the *live* one. The result: a
+frozen snapshot read forever, silently, with no error to signal it -- the exact kind of bug
+that's invisible until someone happens to close/reopen the game mid-session.
+
+Fixed by tracking the top-level `time` field (confirmed via the SDK: a continuously-advancing
+telemetry clock) and reattaching if it stalls for too long. First attempt used a 3-second
+threshold and immediately produced a false-positive storm: `time` legitimately stops advancing
+while sitting at the main menu with no profile loaded (no simulation running to tick it), so
+the short threshold just churned on an otherwise-still-valid mapping. Widened to ~60 seconds --
+still far shorter than the hours-long freeze the real bug produced, but well clear of normal
+menu-idle time. Reattaching on a false positive is cheap and harmless (the mapping is still
+valid, so it just reopens the same handle), so erring toward a slightly generous threshold
+costs nothing.
+
 ## Milestone 5 result: tray + overlay + dashboard, launched via the AP ecosystem itself
 
 Built `bridge/overlay/` (tray icon, transparent corner-notification window, dashboard popup)

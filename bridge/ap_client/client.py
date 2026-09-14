@@ -212,12 +212,17 @@ async def report_goal_complete(ctx: Ets2AtsContext) -> None:
     await ctx.send_msgs([{"cmd": "StatusUpdate", "status": ClientStatus.CLIENT_GOAL}])
 
 
+STALE_TELEMETRY_POLLS = 600  # ~60s at TELEMETRY_POLL_HZ with a non-advancing clock
+
+
 async def telemetry_watcher(ctx: Ets2AtsContext) -> None:
     """Poll SCS shared memory for anything with a live event: jobDelivered edges drive
     Delivery #N locations, distance milestones, and two of the four goal types (flawless
     long-haul, delivery count)."""
     mm: ExistingFileMapping | None = None
     prev_delivered = False
+    last_time_value: int | None = None
+    stale_polls = 0
 
     while not ctx.exit_event.is_set():
         if mm is None:
@@ -226,12 +231,38 @@ async def telemetry_watcher(ctx: Ets2AtsContext) -> None:
                 logger.info("[telemetry] attached to SCS shared memory.")
                 if ctx.tracker_ui:
                     ctx.tracker_ui.set_status("Telemetry: attached")
+                last_time_value = None
+                stale_polls = 0
             except OSError:
                 await asyncio.sleep(5.0)
                 continue
 
         buf = mm.read()[:ctypes.sizeof(ScsTelemetryMap)]
         snap = ScsTelemetryMap.from_buffer_copy(buf)
+
+        # A live game continuously advances `time`. Windows keeps a named shared memory
+        # mapping's data alive for any process still holding a handle to it, even after the
+        # process that created it (the game) exits -- so if the game is closed and relaunched
+        # while we're attached, we'd otherwise keep silently reading a frozen snapshot from
+        # the dead mapping forever, with no error to signal it. The threshold here is
+        # deliberately generous (~60s, not a few seconds): confirmed in testing that `time`
+        # can legitimately stop advancing for a while at the main menu with no profile loaded
+        # (no simulation running to tick it), so a short threshold false-triggers there and
+        # just churns on a still-valid mapping. The real bug this guards against left a client
+        # frozen for hours, so a minute of tolerance still catches it comfortably.
+        if snap.time == last_time_value:
+            stale_polls += 1
+            if stale_polls >= STALE_TELEMETRY_POLLS:
+                logger.info("[telemetry] shared memory appears stale (game restarted?) -- reattaching.")
+                mm.close()
+                mm = None
+                if ctx.tracker_ui:
+                    ctx.tracker_ui.set_status("Telemetry: reattaching...")
+                continue
+        else:
+            stale_polls = 0
+        last_time_value = snap.time
+
         ctx.last_seen_game = TELEMETRY_GAME_NAMES.get(snap.scs_values.game, ctx.last_seen_game)
 
         delivered = bool(snap.special_b.jobDelivered)
