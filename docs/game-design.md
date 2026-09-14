@@ -91,6 +91,50 @@ reset back. Confirmed working: `g_exp_gain` was unset on this installation (`get
 returned `None`); `set_cvar` appended `uset g_exp_gain "0.01"` and created a timestamped
 backup, matching the same backup-before-write discipline as every other edit in this project.
 
+### Follow-up: real city data for all 341 cities, DLC-gated
+
+The original 4-city starter list (Kassel, Hannover, Frankfurt, Nurnberg) is now replaced with
+the full real city catalog -- **341 cities** (80 base game + 261 across the 9 map DLCs) --
+extracted directly from the game's own archives rather than guessed from community sources.
+
+**How**: SCS's `.scs` archives are their own "HashFS v2" format (confirmed via magic bytes,
+`SCS#`), not plain zip. Used `sk-zk/Extractor` (the tool referenced favorably in SCS's own
+official forum, not just a random repo) to list `/def/city/*.sui` inside `def.scs` (base game)
+and each DLC's own archive (e.g. `dlc_east.scs` for Going East!) -- each DLC has its own
+separate city listing for its exclusive cities, no overlap found across any of the 10
+archives. City ids matched every previously-confirmed one exactly (`kassel`, `hannover`,
+`frankfurt`, `nurnberg`, and `bremen` -- the last found live during testing above). One
+format quirk handled: a few filenames carry a `.dlc_xxx` disambiguator baked into the archive
+path itself (e.g. `aalborg.dlc_north.sui`) -- confirmed this is a real archive-internal
+naming detail, not an extraction artifact, and stripped it to get the canonical id. Display
+names are auto-derived (title-cased id, underscores to spaces) -- fine for most, a few
+(accented names, unusual capitalization) may read a little oddly and can be special-cased
+later; checked for and found zero display-name collisions across all 341.
+
+**Scope decision**: use the full list rather than hand-curating a smaller subset, gated by the
+DLC toggle options that already existed in `options.py` but had no effect until now.
+`apworld/ets2ats/city_data.py` holds `CITIES` (city_id -> (display_name, owning dlc key or
+`None` for base)) and `DLC_OPTION_NAMES` (dlc key -> the matching option attribute name).
+`Ets2AtsWorld._active_cities()` filters this by the player's actual DLC options and is used by
+both `create_regions` (which locations exist) and `fill_slot_data` (what the client needs to
+map a save's city ids to location names) so the two can never disagree -- the client no longer
+imports a static city list at all, it gets `cities` from slot_data on connect instead, since
+the active set now varies per seed.
+
+**Confirmed working**: a base-game-only YAML generated exactly 176 locations
+(80 cities x 2 + 10 deliveries + 3 distance + 3 XP); enabling all 9 DLCs on another YAML in
+the same seed generated exactly 698 (341 x 2 + 16) -- confirming the DLC gating actually
+changes the pool size correctly in both directions, not just that the option exists.
+
+**`bridge/tools/detect_dlc.py`**: the local helper script anticipated in the original design
+(`Generate.py` can't auto-detect a player's installed DLCs itself, since generation may run on
+a different machine). Checks for each DLC's known `.scs` file's existence in the install
+directory and writes the matching `dlc_*` values into a player's YAML. Confirmed working
+against the real installation (correctly detected all 9 owned DLCs) via `pip install PyYAML`.
+Deliberately does not import `city_data.py`'s `DLC_OPTION_NAMES` (would require a full
+Archipelago checkout on `PYTHONPATH` just to run a file-existence check) -- its own `DLC_FILES`
+key set must be kept in sync with `city_data.py` by hand.
+
 ## Goal (player-selectable, one per seed)
 
 A `Choice` option lets the player pick which win condition applies to their world -- deliberately
@@ -210,10 +254,9 @@ intentional, not a bug to guard against: it matches the standing assumption that
 profile is dedicated to this AP run (the very first architecture idea raised for this whole
 project), so any progress already on that profile legitimately counts.
 
-DLC toggles (`options.py`) and the DLC-detection helper script are still not built -- the
-location pool is the small curated starter-city list regardless of these options' values (see
-above). ATS support, and confirming the `dlc_balkan_e`/`dlc_balkan_w` naming against SCS's own
-docs, remain open.
+DLC toggles now drive real location generation and the detection helper script exists (see the
+"real city data" follow-up above, done in a later pass). ATS support, and confirming the
+`dlc_balkan_e`/`dlc_balkan_w` naming against SCS's own docs, remain open.
 
 ### A second real bug, caught before it could bite: double-applying items on reconnect
 

@@ -37,7 +37,7 @@ from CommonClient import ClientCommandProcessor, CommonContext, get_base_parser,
 from NetUtils import ClientStatus
 from worlds.ets2ats import GAME_NAME
 from worlds.ets2ats.items import MONEY_ITEM_VALUES, XP_ITEM_VALUES
-from worlds.ets2ats.locations import DISTANCE_MILESTONES_KM, LOCATION_NAME_TO_ID, STARTER_CITIES, XP_MILESTONES
+from worlds.ets2ats.locations import DISTANCE_MILESTONES_KM, LOCATION_NAME_TO_ID, XP_MILESTONES
 
 from bridge.overlay.ui import UI
 from bridge.sync import profile_paths
@@ -50,7 +50,6 @@ TELEMETRY_POLL_HZ = 10
 SAVE_POLL_SECONDS = 20
 CLIENT_STATE_FILE = Path(__file__).parent / "client_state.json"
 TELEMETRY_GAME_NAMES = {1: "ets2", 2: "ats"}
-CITY_ID_TO_NAME = dict(STARTER_CITIES)
 
 
 class Ets2AtsClientCommandProcessor(ClientCommandProcessor):
@@ -96,6 +95,10 @@ class Ets2AtsContext(CommonContext):
         self.goal_type: str | None = None
         self.goal_params: dict = {}
         self.goal_sent = False
+        # city_id -> display_name for whichever cities this seed's DLC options activated --
+        # set from slot_data on connect, not a static import, since it varies per seed (see
+        # Ets2AtsWorld._active_cities in apworld/ets2ats/__init__.py).
+        self.city_id_to_name: dict[str, str] = {}
         # NOTE: deliberately not named `self.ui` -- CommonContext reserves that name for its
         # own (Kivy-based) GUI object and checks `if self.ui:` internally (e.g. server_loop's
         # reconnect handling); overwriting it here broke that with no error until the
@@ -146,6 +149,7 @@ class Ets2AtsContext(CommonContext):
             slot_data = args.get("slot_data", {})
             self.goal_type = slot_data.get("goal_type")
             self.goal_params = slot_data
+            self.city_id_to_name = slot_data.get("cities", {})
             if self.tracker_ui:
                 self.tracker_ui.set_status(f"Connected as {self.auth} (slot {self.slot})")
         elif cmd == "ReceivedItems":
@@ -372,7 +376,7 @@ async def save_poller(ctx: Ets2AtsContext) -> None:
         new_cities = fields.visited_cities - ctx.visited_cities_seen
         ctx.visited_cities_seen |= fields.visited_cities
         for city_id in new_cities:
-            name = CITY_ID_TO_NAME.get(city_id)
+            name = ctx.city_id_to_name.get(city_id)
             if name is None:
                 continue
             location_name = f"City Discovered: {name}"
@@ -386,7 +390,7 @@ async def save_poller(ctx: Ets2AtsContext) -> None:
         new_dealers = fields.unlocked_dealers - ctx.unlocked_dealers_seen
         ctx.unlocked_dealers_seen |= fields.unlocked_dealers
         for city_id in new_dealers:
-            name = CITY_ID_TO_NAME.get(city_id)
+            name = ctx.city_id_to_name.get(city_id)
             if name is None:
                 continue
             location_name = f"Dealer Unlocked: {name}"

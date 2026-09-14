@@ -16,6 +16,7 @@ from worlds.AutoWorld import World
 from worlds.LauncherComponents import Component, Type, components
 from worlds.LauncherComponents import launch as launch_component
 
+from .city_data import CITIES, DLC_OPTION_NAMES
 from .items import (
     FILLER_WEIGHTS,
     ITEM_CLASSIFICATIONS,
@@ -25,12 +26,9 @@ from .items import (
     Ets2AtsItem,
 )
 from .locations import (
-    CITY_DISCOVERED_LOCATIONS,
-    DEALER_UNLOCKED_LOCATIONS,
     DISTANCE_LOCATIONS,
     DISTANCE_MILESTONES_KM,
     LOCATION_NAME_TO_ID,
-    STARTER_CITIES,
     VICTORY_LOCATION,
     XP_LOCATIONS,
     XP_MILESTONES,
@@ -62,6 +60,17 @@ GAME_NAME = "ETS2ATS"
 GOAL_TYPE_NAMES = ["flawless_long_haul", "money_target", "delivery_count", "xp_amount"]
 
 
+def _active_cities(options: Ets2AtsOptions) -> dict[str, str]:
+    """city_id -> display_name for base game plus every DLC this player has enabled. Shared
+    between create_regions (which locations exist) and fill_slot_data (what the client needs
+    to map a save's city ids to those location names) so the two can never disagree."""
+    return {
+        city_id: name
+        for city_id, (name, dlc) in CITIES.items()
+        if dlc is None or getattr(options, DLC_OPTION_NAMES[dlc])
+    }
+
+
 class Ets2AtsWorld(World):
     """The real ETS2/ATS design: deliveries, city/dealer discovery, and stat milestones as
     locations; money, XP, and fines as items; a player-selectable goal condition."""
@@ -79,9 +88,11 @@ class Ets2AtsWorld(World):
         delivery_names = [
             f"Delivery #{n}" for n in range(1, self.options.delivery_location_count.value + 1)
         ]
+        active_cities = _active_cities(self.options)
+        city_names = [f"City Discovered: {name}" for name in active_cities.values()]
+        dealer_names = [f"Dealer Unlocked: {name}" for name in active_cities.values()]
         active_names = (
-            delivery_names + CITY_DISCOVERED_LOCATIONS + DEALER_UNLOCKED_LOCATIONS
-            + DISTANCE_LOCATIONS + XP_LOCATIONS
+            delivery_names + city_names + dealer_names + DISTANCE_LOCATIONS + XP_LOCATIONS
         )
         menu.add_locations({name: LOCATION_NAME_TO_ID[name] for name in active_names}, Ets2AtsLocation)
 
@@ -116,7 +127,7 @@ class Ets2AtsWorld(World):
             "goal_money": self.options.goal_money.value,
             "goal_delivery_count": self.options.goal_delivery_count.value,
             "goal_xp": self.options.goal_xp.value,
-            "starter_cities": STARTER_CITIES,
+            "cities": _active_cities(self.options),
             "distance_milestones_km": DISTANCE_MILESTONES_KM,
             "xp_milestones": XP_MILESTONES,
             "money_item_values": MONEY_ITEM_VALUES,
