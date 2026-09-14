@@ -92,6 +92,28 @@ above other windows on Windows. Fixed by building a plain `Toplevel` instead
 notification window is built: explicit `-topmost`, plus `lift()`/`focus_force()` before
 blocking on `wait_window()`. Confirmed visible and answerable end to end afterward.
 
+## Future work: auto-launch the game from the Launcher click
+
+Raised while investigating the stale-telemetry bug above: could launching ETS2/ATS ourselves
+(from `launch_client`, alongside starting the AP client/tray/overlay) and tracking that
+specific process's PID solve the reliability issue more precisely? Evaluated and set aside for
+now -- worth recording why, so it isn't re-litigated from scratch later:
+
+- **Doesn't meaningfully improve the reliability fix.** Tracking a known PID would let us
+  detect the game closing *instantly* instead of within the ~60s heartbeat-staleness window
+  above, but the recovery step is identical either way (close the handle, reattach to whatever
+  mapping is currently live) -- shaving a worst-case minute off detection time for a background
+  check-detector isn't worth the added complexity. It also wouldn't fully generalize: if the
+  player closes the game and relaunches it themselves rather than through us, we have no PID
+  to track regardless of whether we launched the first instance.
+- **The real value would be a different goal**: making the Milestone 5 "one click starts
+  everything" experience include the game itself, not just the AP client/tray/overlay. That's
+  a legitimate, separate feature -- but it needs real scoping of its own before attempting:
+  finding the correct install path (Steam vs. non-Steam, default vs. custom install
+  location), picking ETS2 vs. ATS, and choosing a launch method (`steam://rungameid/...` vs.
+  the exe directly). Deferred to a later milestone, to be scoped on its own rather than as a
+  side effect of the telemetry bug fix.
+
 ## Milestone roadmap update (post-Milestone 4)
 
 Scoping pass for milestones 5-7 after Milestone 4's live confirmation. Two changes from the
