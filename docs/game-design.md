@@ -104,6 +104,14 @@ delivery count.
 | Delivery Count | Cumulative deliveries >= `goal_delivery_count` (default 25) | Live telemetry (same counter Delivery #N locations already use) |
 | XP Amount | `economy.experience_points` >= `goal_xp` (default TBD) | Save-file poll |
 
+**Confirmed live**: `jobDeliveredDistanceKm` (the field behind both distance milestones and the
+Flawless Long-Haul Delivery goal) is over-the-road distance only -- a delivery that included a
+ferry crossing did not have the ferry leg counted toward it. SCS's own SDK docs just describe
+it as "the real distance in km on the job" without settling this either way, and ferry use is
+tracked as an entirely separate gameplay event from job delivery, so this was worth confirming
+empirically rather than assuming. Relevant for `goal_distance_km` tuning: a route's ferry
+segments don't help reach the threshold, only the driven portions do.
+
 Implementation shape: a single always-reachable "Victory" location holding a "Victory" event
 item, with `multiworld.completion_condition[player] = lambda state: state.has("Victory",
 player)`. The bridge client watches whichever signal matches the chosen goal type (telemetry

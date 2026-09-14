@@ -212,7 +212,8 @@ async def report_goal_complete(ctx: Ets2AtsContext) -> None:
     await ctx.send_msgs([{"cmd": "StatusUpdate", "status": ClientStatus.CLIENT_GOAL}])
 
 
-STALE_TELEMETRY_POLLS = 600  # ~60s at TELEMETRY_POLL_HZ with a non-advancing clock
+STALE_TELEMETRY_POLLS_ACTIVE = 600     # ~60s unpaused with a non-advancing clock
+STALE_TELEMETRY_POLLS_PAUSED = 6_000   # ~10min paused with a non-advancing clock
 
 
 async def telemetry_watcher(ctx: Ets2AtsContext) -> None:
@@ -240,19 +241,25 @@ async def telemetry_watcher(ctx: Ets2AtsContext) -> None:
         buf = mm.read()[:ctypes.sizeof(ScsTelemetryMap)]
         snap = ScsTelemetryMap.from_buffer_copy(buf)
 
-        # A live game continuously advances `time`. Windows keeps a named shared memory
-        # mapping's data alive for any process still holding a handle to it, even after the
-        # process that created it (the game) exits -- so if the game is closed and relaunched
-        # while we're attached, we'd otherwise keep silently reading a frozen snapshot from
-        # the dead mapping forever, with no error to signal it. The threshold here is
-        # deliberately generous (~60s, not a few seconds): confirmed in testing that `time`
-        # can legitimately stop advancing for a while at the main menu with no profile loaded
-        # (no simulation running to tick it), so a short threshold false-triggers there and
-        # just churns on a still-valid mapping. The real bug this guards against left a client
-        # frozen for hours, so a minute of tolerance still catches it comfortably.
+        # A live, unpaused game continuously advances `time`. Windows keeps a named shared
+        # memory mapping's data alive for any process still holding a handle to it, even after
+        # the process that created it (the game) exits -- so if the game is closed and
+        # relaunched while we're attached, we'd otherwise keep silently reading a frozen
+        # snapshot from the dead mapping forever, with no error to signal it.
+        #
+        # Confirmed live that `time` legitimately freezes solid whenever `paused` is true (the
+        # ESC menu, a loading screen, alt-tabbing, sitting at the main menu -- all normal,
+        # frequent occurrences during otherwise-healthy play, not just "sitting at the main
+        # menu" as first assumed), so a single short threshold false-triggered constantly.
+        # Using two thresholds keyed on `paused` fixes that without losing real detection: a
+        # game that dies while actively driving (paused=False frozen in the dead snapshot) is
+        # still caught within ~60s, and one that dies while sitting paused (paused=True frozen
+        # in the dead snapshot) is still caught, just with a longer, deliberately generous
+        # grace period so it doesn't fire on every ordinary pause.
         if snap.time == last_time_value:
             stale_polls += 1
-            if stale_polls >= STALE_TELEMETRY_POLLS:
+            threshold = STALE_TELEMETRY_POLLS_PAUSED if snap.paused else STALE_TELEMETRY_POLLS_ACTIVE
+            if stale_polls >= threshold:
                 logger.info("[telemetry] shared memory appears stale (game restarted?) -- reattaching.")
                 mm.close()
                 mm = None

@@ -17,14 +17,30 @@ frozen snapshot read forever, silently, with no error to signal it -- the exact 
 that's invisible until someone happens to close/reopen the game mid-session.
 
 Fixed by tracking the top-level `time` field (confirmed via the SDK: a continuously-advancing
-telemetry clock) and reattaching if it stalls for too long. First attempt used a 3-second
-threshold and immediately produced a false-positive storm: `time` legitimately stops advancing
-while sitting at the main menu with no profile loaded (no simulation running to tick it), so
-the short threshold just churned on an otherwise-still-valid mapping. Widened to ~60 seconds --
-still far shorter than the hours-long freeze the real bug produced, but well clear of normal
-menu-idle time. Reattaching on a false positive is cheap and harmless (the mapping is still
-valid, so it just reopens the same handle), so erring toward a slightly generous threshold
-costs nothing.
+telemetry clock) and reattaching if it stalls for too long. Two attempts before landing on the
+right heuristic:
+
+1. **First attempt**: a flat 3-second threshold. Immediately produced a false-positive storm --
+   assumed `time` freezing meant a dead mapping, but a live game legitimately freezes it too.
+2. **Second attempt**: widened to a flat ~60 seconds, reasoning that it "only" freezes while
+   sitting at the main menu with no profile loaded. Still produced a large false-positive
+   storm in further live testing -- sampling the live struct directly (`paused`, `time`,
+   `simulatedTime`, `renderTime` together) showed `time` freezes solid any time `paused` is
+   true, which covers far more than just the main menu: the ESC menu, a loading screen,
+   alt-tabbing -- all normal, frequent occurrences during otherwise-healthy play.
+3. **Fix**: key the threshold on the already-available `paused` field instead of using one
+   number for every state. ~60 seconds while `paused` is false (a game that dies mid-drive is
+   still caught quickly), ~10 minutes while `paused` is true (deliberately generous, since
+   legitimately sitting paused for a while is common and reattaching needlessly is the failure
+   mode being avoided -- a game that dies while sitting paused is still eventually caught, just
+   with more tolerance for the common case). Reattaching on a false positive is cheap and
+   harmless regardless (the mapping is still valid, so it just reopens the same handle) --
+   the two thresholds are about cutting log/status noise during normal play, not correctness.
+
+Worth remembering for future telemetry-adjacent work: don't assume a field's behavior from its
+name or a single sample -- `time` sounds like it should be a simple monotonic clock, but its
+actual behavior (freezes on pause) only became clear by sampling it directly against the live
+game across a pause transition.
 
 ## Milestone 5 result: tray + overlay + dashboard, launched via the AP ecosystem itself
 
