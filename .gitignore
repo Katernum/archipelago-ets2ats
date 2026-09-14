@@ -15,4 +15,4 @@ prototypes/samples/
 config.cfg.pre-ap-edit-*
 
 # Runtime state, not source
-bridge/ap_client/sync_state.json
+bridge/ap_client/client_state.json

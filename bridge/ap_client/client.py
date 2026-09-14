@@ -48,7 +48,7 @@ from bridge.telemetry.win_mmf import ExistingFileMapping
 
 TELEMETRY_POLL_HZ = 10
 SAVE_POLL_SECONDS = 20
-SYNC_STATE_FILE = Path(__file__).parent / "sync_state.json"
+CLIENT_STATE_FILE = Path(__file__).parent / "client_state.json"
 TELEMETRY_GAME_NAMES = {1: "ets2", 2: "ats"}
 CITY_ID_TO_NAME = dict(STARTER_CITIES)
 
@@ -72,18 +72,26 @@ class Ets2AtsContext(CommonContext):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self.delivery_count = 0
-        self.cumulative_distance_km = 0.0
-        self.distance_milestones_sent: set[int] = set()
-        self.xp_milestones_sent: set[int] = set()
-        self.visited_cities_seen: set[str] = set()
-        self.unlocked_dealers_seen: set[str] = set()
+        # All of the below is check-detection dedup state -- which deliveries/milestones/
+        # cities have already produced a check -- plus how much Sync has applied. It must be
+        # persisted, not just kept in memory: an in-memory-only delivery_count reset to 0 on
+        # every client restart, so a real post-restart delivery got labeled "Delivery #1"
+        # again, collided with the already-checked location of that name, and silently
+        # produced no check at all -- caught live when a restart (needed to pick up a
+        # telemetry fix) swallowed a real delivery this way.
+        state = self.load_client_state()
+        self.delivery_count: int = state["delivery_count"]
+        self.cumulative_distance_km: float = state["cumulative_distance_km"]
+        self.distance_milestones_sent: set[int] = set(state["distance_milestones_sent"])
+        self.xp_milestones_sent: set[int] = set(state["xp_milestones_sent"])
+        self.visited_cities_seen: set[str] = set(state["visited_cities_seen"])
+        self.unlocked_dealers_seen: set[str] = set(state["unlocked_dealers_seen"])
         # How many of self.items_received (CommonContext's own authoritative, reconnect-safe
         # list) have already been applied to a save via Sync. Deliberately NOT a list of item
         # names we append to ourselves -- the server resends a player's FULL item history on
         # every reconnect (see CommonClient.py's ReceivedItems handling), so anything we
         # already applied last session would otherwise get queued and double-applied again.
-        self.items_applied_count: int = self.load_sync_state()
+        self.items_applied_count: int = state["items_applied_count"]
         self.last_seen_game: str | None = None
         self.goal_type: str | None = None
         self.goal_params: dict = {}
@@ -95,13 +103,30 @@ class Ets2AtsContext(CommonContext):
         self.tracker_ui: UI | None = None  # set once the asyncio loop is running, see main_async
 
     @staticmethod
-    def load_sync_state() -> int:
-        if SYNC_STATE_FILE.exists():
-            return json.loads(SYNC_STATE_FILE.read_text()).get("items_applied_count", 0)
-        return 0
+    def load_client_state() -> dict:
+        defaults = {
+            "delivery_count": 0,
+            "cumulative_distance_km": 0.0,
+            "distance_milestones_sent": [],
+            "xp_milestones_sent": [],
+            "visited_cities_seen": [],
+            "unlocked_dealers_seen": [],
+            "items_applied_count": 0,
+        }
+        if CLIENT_STATE_FILE.exists():
+            defaults.update(json.loads(CLIENT_STATE_FILE.read_text()))
+        return defaults
 
-    def save_sync_state(self) -> None:
-        SYNC_STATE_FILE.write_text(json.dumps({"items_applied_count": self.items_applied_count}))
+    def save_client_state(self) -> None:
+        CLIENT_STATE_FILE.write_text(json.dumps({
+            "delivery_count": self.delivery_count,
+            "cumulative_distance_km": self.cumulative_distance_km,
+            "distance_milestones_sent": sorted(self.distance_milestones_sent),
+            "xp_milestones_sent": sorted(self.xp_milestones_sent),
+            "visited_cities_seen": sorted(self.visited_cities_seen),
+            "unlocked_dealers_seen": sorted(self.unlocked_dealers_seen),
+            "items_applied_count": self.items_applied_count,
+        }))
 
     def pending_item_names(self) -> list[str]:
         """Items received but not yet applied via Sync -- a slice of the authoritative
@@ -196,7 +221,7 @@ async def perform_sync(ctx: Ets2AtsContext, explicit_path: Path | None) -> None:
     report(f"Synced {pending_count} item(s): {', '.join(parts)}. "
            "Click Continue on that profile.")
     ctx.items_applied_count = len(ctx.items_received)
-    ctx.save_sync_state()
+    ctx.save_client_state()
     if ctx.tracker_ui:
         ctx.tracker_ui.set_pending([])
 
@@ -308,6 +333,8 @@ async def telemetry_watcher(ctx: Ets2AtsContext) -> None:
                 if ctx.delivery_count >= ctx.goal_params.get("goal_delivery_count", float("inf")):
                     await report_goal_complete(ctx)
 
+            ctx.save_client_state()
+
         prev_delivered = delivered
         await asyncio.sleep(1.0 / TELEMETRY_POLL_HZ)
 
@@ -388,6 +415,8 @@ async def save_poller(ctx: Ets2AtsContext) -> None:
         elif ctx.goal_type == "xp_amount" and not ctx.goal_sent:
             if fields.xp >= ctx.goal_params.get("goal_xp", float("inf")):
                 await report_goal_complete(ctx)
+
+        ctx.save_client_state()
 
 
 def _start_ui(ctx: Ets2AtsContext, loop: asyncio.AbstractEventLoop) -> UI:

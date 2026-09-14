@@ -234,3 +234,32 @@ relying on it there is safe), and "pending" is simply
 `ctx.items_received[ctx.items_applied_count:]`. Sync advances the counter to
 `len(ctx.items_received)` on success rather than clearing a list. Persisted to
 `sync_state.json` (renamed from `pending_items.json` to reflect what it actually stores).
+
+### A third real bug, caught live: check-detection state only ever lived in memory
+
+`delivery_count`, `cumulative_distance_km`, and the milestone/city/dealer "already sent"
+tracking sets were plain instance attributes with no persistence at all. Three client restarts
+during live telemetry-bug fixing (see docs/design-decisions.md) reset `delivery_count` to 0
+each time -- so a real post-restart delivery got labeled "Delivery #1" again, collided with
+the already-checked location of that exact name, and the check was silently a no-op. At least
+one genuine delivery during that window produced no check and no item at all, with nothing in
+the logs to distinguish it from a legitimate duplicate.
+
+`visited_cities_seen`, `unlocked_dealers_seen`, and `xp_milestones_sent` turned out not to
+need this fix for correctness (though they got it anyway, for consistency) -- they're
+reconstructed fresh from the save file's own ground truth on the very first save-poll after any
+restart, since `read_tracked_fields` always reads the *current* full state, not a delta. Only
+`delivery_count` and `cumulative_distance_km` are pure running tallies with no equivalent
+ground-truth field to re-derive from, which is exactly why only those two caused a real,
+unrecoverable gap. Fixed by persisting all six together (`client_state.json`, renamed again
+from `sync_state.json` now that it covers more than sync), written after every state change in
+both `telemetry_watcher` and `save_poller`.
+
+Migrating the existing test session's state needed judgment, not just a mechanical copy:
+`items_applied_count` (8) was carried over exactly, since getting it wrong risks double-
+applying real money/XP. `delivery_count` and `cumulative_distance_km` couldn't be reconstructed
+exactly (deliveries lost during the broken window weren't logged in enough detail to count),
+so they were seeded conservatively from only the two precisely-logged real deliveries
+(215.0km + 394.0km = 609.0km; `delivery_count: 1`, matching the one delivery that actually
+produced a check) -- safe because undercounting a running tally only delays the next threshold
+slightly, while overcounting it would have permanently skipped ones never actually granted.
