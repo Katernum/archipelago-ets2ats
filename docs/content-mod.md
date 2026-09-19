@@ -4,6 +4,12 @@ Scoped after Milestone 6. Distinct from `docs/game-design.md` (locations/items/r
 `docs/design-decisions.md` (bridge/telemetry technical findings) -- this covers the actual
 `.scs` mod (`content-mod/`) and what building it revealed about SCS's modding format.
 
+**Confirmed working live**: installed `archipelago_rewards.scs` on the Mod Test profile and
+"Archipelago Special" appeared as a real, purchasable paint job option at a truck dealer.
+Confirms both open questions from below at once -- the packaging format (plain zip renamed
+`.scs`) loads correctly, and paint jobs really are auto-discovered from their folder location
+with no central per-truck registration needed.
+
 ## Scope decision: always-purchasable cosmetics, not hard AP-exclusive gating
 
 The original vision (see early design discussion) imagined mod-added content that stays
