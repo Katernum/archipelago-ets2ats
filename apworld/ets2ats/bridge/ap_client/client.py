@@ -38,7 +38,20 @@ from CommonClient import ClientCommandProcessor, CommonContext, get_base_parser,
 from NetUtils import ClientStatus
 from worlds.ets2ats import GAME_NAME
 from worlds.ets2ats.items import MONEY_ITEM_VALUES, XP_ITEM_VALUES
-from worlds.ets2ats.locations import DISTANCE_MILESTONES_KM, LOCATION_NAME_TO_ID, XP_MILESTONES
+from worlds.ets2ats.locations import (
+    DISTANCE_MILESTONES_KM,
+    FERRY_ONEOFF_LOCATION,
+    FERRY_ROUTE_MILESTONES,
+    FUEL_VOLUME_MILESTONES,
+    LOCATION_NAME_TO_ID,
+    MAJOR_FINE_LOCATION,
+    MAJOR_FINE_THRESHOLD,
+    REFUEL_COUNT_MILESTONES,
+    TOLLGATE_MILESTONES,
+    TRAIN_ONEOFF_LOCATION,
+    TRAIN_ROUTE_MILESTONES,
+    XP_MILESTONES,
+)
 
 from ..overlay.ui import UI
 from ..sync import profile_paths
@@ -86,6 +99,22 @@ class Ets2AtsContext(CommonContext):
         self.xp_milestones_sent: set[int] = set(state["xp_milestones_sent"])
         self.visited_cities_seen: set[str] = set(state["visited_cities_seen"])
         self.unlocked_dealers_seen: set[str] = set(state["unlocked_dealers_seen"])
+        # "Go out of your way" checks (route variety + economic/flavor) -- same dedup
+        # reasoning as above: these are pure running tallies with no save-file ground truth
+        # to self-heal from, so they need persisting too, not just the ones above.
+        self.tollgate_count: int = state["tollgate_count"]
+        self.tollgate_milestones_sent: set[int] = set(state["tollgate_milestones_sent"])
+        self.refuel_count: int = state["refuel_count"]
+        self.refuel_count_milestones_sent: set[int] = set(state["refuel_count_milestones_sent"])
+        self.cumulative_fuel_liters: float = state["cumulative_fuel_liters"]
+        self.fuel_volume_milestones_sent: set[int] = set(state["fuel_volume_milestones_sent"])
+        self.ferry_oneoff_sent: bool = state["ferry_oneoff_sent"]
+        self.ferry_routes_seen: set[tuple[str, str]] = {tuple(pair) for pair in state["ferry_routes_seen"]}
+        self.ferry_route_milestones_sent: set[int] = set(state["ferry_route_milestones_sent"])
+        self.train_oneoff_sent: bool = state["train_oneoff_sent"]
+        self.train_routes_seen: set[tuple[str, str]] = {tuple(pair) for pair in state["train_routes_seen"]}
+        self.train_route_milestones_sent: set[int] = set(state["train_route_milestones_sent"])
+        self.major_fine_sent: bool = state["major_fine_sent"]
         # How many of self.items_received (CommonContext's own authoritative, reconnect-safe
         # list) have already been applied to a save via Sync. Deliberately NOT a list of item
         # names we append to ourselves -- the server resends a player's FULL item history on
@@ -116,6 +145,19 @@ class Ets2AtsContext(CommonContext):
             "visited_cities_seen": [],
             "unlocked_dealers_seen": [],
             "items_applied_count": 0,
+            "tollgate_count": 0,
+            "tollgate_milestones_sent": [],
+            "refuel_count": 0,
+            "refuel_count_milestones_sent": [],
+            "cumulative_fuel_liters": 0.0,
+            "fuel_volume_milestones_sent": [],
+            "ferry_oneoff_sent": False,
+            "ferry_routes_seen": [],
+            "ferry_route_milestones_sent": [],
+            "train_oneoff_sent": False,
+            "train_routes_seen": [],
+            "train_route_milestones_sent": [],
+            "major_fine_sent": False,
         }
         if CLIENT_STATE_FILE.exists():
             defaults.update(json.loads(CLIENT_STATE_FILE.read_text()))
@@ -130,6 +172,19 @@ class Ets2AtsContext(CommonContext):
             "visited_cities_seen": sorted(self.visited_cities_seen),
             "unlocked_dealers_seen": sorted(self.unlocked_dealers_seen),
             "items_applied_count": self.items_applied_count,
+            "tollgate_count": self.tollgate_count,
+            "tollgate_milestones_sent": sorted(self.tollgate_milestones_sent),
+            "refuel_count": self.refuel_count,
+            "refuel_count_milestones_sent": sorted(self.refuel_count_milestones_sent),
+            "cumulative_fuel_liters": self.cumulative_fuel_liters,
+            "fuel_volume_milestones_sent": sorted(self.fuel_volume_milestones_sent),
+            "ferry_oneoff_sent": self.ferry_oneoff_sent,
+            "ferry_routes_seen": sorted(list(pair) for pair in self.ferry_routes_seen),
+            "ferry_route_milestones_sent": sorted(self.ferry_route_milestones_sent),
+            "train_oneoff_sent": self.train_oneoff_sent,
+            "train_routes_seen": sorted(list(pair) for pair in self.train_routes_seen),
+            "train_route_milestones_sent": sorted(self.train_route_milestones_sent),
+            "major_fine_sent": self.major_fine_sent,
         }))
 
     def pending_item_names(self) -> list[str]:
@@ -246,12 +301,32 @@ STALE_TELEMETRY_POLLS_ACTIVE = 600     # ~60s unpaused with a non-advancing cloc
 STALE_TELEMETRY_POLLS_PAUSED = 6_000   # ~10min paused with a non-advancing clock
 
 
+def _cstr(raw: bytes) -> str:
+    return raw.split(b"\0", 1)[0].decode("utf-8", errors="replace")
+
+
+async def _fire_check(ctx: Ets2AtsContext, location_name: str, detail: str = "") -> None:
+    location_id = LOCATION_NAME_TO_ID.get(location_name)
+    if location_id is None:
+        return
+    suffix = f" ({detail})" if detail else ""
+    logger.info(f"[telemetry] checking {location_name!r}{suffix}")
+    if ctx.tracker_ui:
+        ctx.tracker_ui.notify(f"Check: {location_name}")
+    await ctx.check_locations([location_id])
+
+
 async def telemetry_watcher(ctx: Ets2AtsContext) -> None:
     """Poll SCS shared memory for anything with a live event: jobDelivered edges drive
     Delivery #N locations, distance milestones, and two of the four goal types (flawless
     long-haul, delivery count)."""
     mm: ExistingFileMapping | None = None
     prev_delivered = False
+    prev_tollgate = False
+    prev_ferry = False
+    prev_train = False
+    prev_refuel_payed = False
+    prev_fined = False
     last_time_value: int | None = None
     stale_polls = 0
 
@@ -339,8 +414,81 @@ async def telemetry_watcher(ctx: Ets2AtsContext) -> None:
                     await report_goal_complete(ctx)
 
             ctx.save_client_state()
-
         prev_delivered = delivered
+
+        # "Go out of your way" checks -- route variety and economic/flavor challenges,
+        # per docs/game-design.md. Each mirrors the jobDelivered edge-detection shape above.
+        tollgate = bool(snap.special_b.tollgate)
+        if tollgate and not prev_tollgate:
+            ctx.tollgate_count += 1
+            for threshold in TOLLGATE_MILESTONES:
+                if threshold in ctx.tollgate_milestones_sent or ctx.tollgate_count < threshold:
+                    continue
+                ctx.tollgate_milestones_sent.add(threshold)
+                await _fire_check(ctx, f"Cross {threshold:,} Tollgates")
+            ctx.save_client_state()
+        prev_tollgate = tollgate
+
+        ferry = bool(snap.special_b.ferry)
+        if ferry and not prev_ferry:
+            route = (_cstr(snap.gameplay_s.ferrySourceName), _cstr(snap.gameplay_s.ferryTargetName))
+            if not ctx.ferry_oneoff_sent:
+                ctx.ferry_oneoff_sent = True
+                await _fire_check(ctx, FERRY_ONEOFF_LOCATION, f"{route[0]} -> {route[1]}")
+            if route not in ctx.ferry_routes_seen:
+                ctx.ferry_routes_seen.add(route)
+                for threshold in FERRY_ROUTE_MILESTONES:
+                    if threshold in ctx.ferry_route_milestones_sent or len(ctx.ferry_routes_seen) < threshold:
+                        continue
+                    ctx.ferry_route_milestones_sent.add(threshold)
+                    await _fire_check(ctx, f"{threshold} Different Ferry Routes")
+            ctx.save_client_state()
+        prev_ferry = ferry
+
+        train = bool(snap.special_b.train)
+        if train and not prev_train:
+            route = (_cstr(snap.gameplay_s.trainSourceName), _cstr(snap.gameplay_s.trainTargetName))
+            if not ctx.train_oneoff_sent:
+                ctx.train_oneoff_sent = True
+                await _fire_check(ctx, TRAIN_ONEOFF_LOCATION, f"{route[0]} -> {route[1]}")
+            if route not in ctx.train_routes_seen:
+                ctx.train_routes_seen.add(route)
+                for threshold in TRAIN_ROUTE_MILESTONES:
+                    if threshold in ctx.train_route_milestones_sent or len(ctx.train_routes_seen) < threshold:
+                        continue
+                    ctx.train_route_milestones_sent.add(threshold)
+                    await _fire_check(ctx, f"{threshold} Different Train Routes")
+            ctx.save_client_state()
+        prev_train = train
+
+        refuel_payed = bool(snap.special_b.refuelPayed)
+        if refuel_payed and not prev_refuel_payed:
+            ctx.refuel_count += 1
+            ctx.cumulative_fuel_liters += snap.gameplay_f.refuelAmount
+            for threshold in REFUEL_COUNT_MILESTONES:
+                if threshold in ctx.refuel_count_milestones_sent or ctx.refuel_count < threshold:
+                    continue
+                ctx.refuel_count_milestones_sent.add(threshold)
+                await _fire_check(ctx, f"Refuel {threshold} Times")
+            for threshold in FUEL_VOLUME_MILESTONES:
+                if threshold in ctx.fuel_volume_milestones_sent or ctx.cumulative_fuel_liters < threshold:
+                    continue
+                ctx.fuel_volume_milestones_sent.add(threshold)
+                await _fire_check(ctx, f"Refuel {threshold:,} Liters Total")
+            ctx.save_client_state()
+        prev_refuel_payed = refuel_payed
+
+        # Threshold deliberately high (see locations.py): a small routine fine happens to
+        # anyone, only a serious violation should count as "going out of your way".
+        fined = bool(snap.special_b.fined)
+        if fined and not prev_fined:
+            fine_amount = snap.gameplay_ll.fineAmount
+            if fine_amount >= MAJOR_FINE_THRESHOLD and not ctx.major_fine_sent:
+                ctx.major_fine_sent = True
+                await _fire_check(ctx, MAJOR_FINE_LOCATION, f"${fine_amount:,}")
+                ctx.save_client_state()
+        prev_fined = fined
+
         await asyncio.sleep(1.0 / TELEMETRY_POLL_HZ)
 
     if mm is not None:

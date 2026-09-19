@@ -55,6 +55,33 @@ docs/design-decisions.md), diffed against the last-seen list -- not live telemet
 there's no shared-memory event for either. This is read-only, same safety profile as every
 other check detection so far; only Sync (applying items) needs the main-menu precondition.
 
+### "Go out of your way" checks: route variety and economic/flavor
+
+Added on request, per player feedback wanting more fun/challenge -- specifically checks that
+require deliberate, repeated engagement rather than things that happen incidentally during
+normal play. All are live telemetry, built on `special_b` events that were fully defined in
+`shared_memory_map.py` since Milestone 2 but never wired to a location until now.
+
+| Location | Trigger | Why it counts as "going out of your way" |
+|---|---|---|
+| Take a Ferry / Take a Train | First `special_b.ferry`/`train` event | One-off -- easy, just needs trying it once |
+| N Different Ferry/Train Routes (2, 4) | Distinct `(source, target)` name pairs from `gameplay_s` | A single crossing might just be on an assigned route; multiple *different* routes means actively seeking them out |
+| Cross 10/50/150 Tollgates | Cumulative `special_b.tollgate` count | Repeated engagement, not a one-off |
+| Refuel 10/50/150 Times | Cumulative `special_b.refuelPayed` count | Repeated engagement |
+| Refuel 1,000/5,000 Liters Total | Cumulative `gameplay_f.refuelAmount` | Implies sustained long-distance driving |
+| Get a Major Fine | Single `gameplay_ll.fineAmount` >= $2,000 | A routine minor fine happens to anyone; a fine this large implies a serious, deliberate violation |
+
+**One correction made during design, worth recording**: originally planned a "Spend $X on
+Fuel" milestone, but the struct's only refuel field (`refuelAmount`) is a fuel *quantity*
+(liters), not a cost -- unlike the other payment events (`fineAmount`, `tollgatePayAmount`,
+`ferryPayAmount`, `trainPayAmount`), there's no `refuelPayAmount` to read. Switched to
+tracking fuel volume instead of inventing data that doesn't exist in the SDK.
+
+Ferry/train routes are tracked as **directional** pairs -- crossing the same route in both
+directions counts as two distinct routes toward the milestone. Deliberate simplification, not
+an oversight: it still requires genuinely using the crossing (a round trip), just doesn't
+bother normalizing direction.
+
 ## Items
 
 | Item | Effect | Mechanism |
