@@ -86,3 +86,21 @@ from every other upgrade category (cabin, chassis, engine, transmission, interio
 loose, unindexed per-file definitions with nothing else in the truck's own directory
 referencing them by name, consistent with how community "paint job pack" mods are documented
 to work. To be confirmed by the live in-game test.
+
+### "MAN TGX" is actually three separate vehicles
+
+Asked before testing which specific truck to check, which surfaced something worth recording:
+`/def/vehicle/truck/` has **three distinct MAN TGX folders** -- `man.tgx` (the classic model,
+what the first version of this content targeted), `man.tgx_euro6` (the classic model's Euro6
+emissions variant, also base game, a fully separate folder with its own cabins/chassis/paint
+jobs), and `man.tgx_2020` (the all-new refreshed model, gated behind its own paid DLC). A mod
+entry for one does not cover the others.
+
+Added the same paint job under `man.tgx_euro6` too (still out of scope: the DLC-gated 2020
+model). One real structural difference found while doing this: **`man.tgx_euro6` has no
+generic reusable mask** the way classic `man.tgx` does -- every aftermarket paint job examined
+(`com_0`, `manba10`, `manba11`, ...) references its own unique per-style texture path, and a
+plain `stock: true` factory color (e.g. `ral_5010.sii`) needs no mask at all. Reused an
+existing per-style mask (`man_tgx_euro6/com_0/...`) for our own definition rather than
+requiring new art, and mirrored a real entry's `suitable_for[]` cabin/chassis compatibility
+list rather than omitting it (unlike the classic model, every Euro6 example included one).
