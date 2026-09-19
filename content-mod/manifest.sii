@@ -1,0 +1,10 @@
+SiiNunit
+{
+mod_package : .archipelago_rewards {
+
+	package_version: "0.1"
+	display_name: "Archipelago Rewards"
+	author: "archipelago-ets2ats"
+	category[]: "truck"
+}
+}

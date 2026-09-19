@@ -1,0 +1,28 @@
+SiiNunit
+{
+accessory_paint_job_data : ap_bundle_1.man.tgx.paint_job
+{
+	name: "Archipelago Special"
+	price: 50000
+	unlock: 0
+	icon: "paintjob_style1"
+	part_type: aftermarket
+
+	mask_r_color: (0.85, 0.65, 0.10)
+	mask_r_locked: true
+	mask_g_color: (0.85, 0.85, 0.85)
+	mask_g_locked: true
+	mask_b_color: (0.25, 0.05, 0.45)
+	mask_b_locked: false
+	base_color: (0.25, 0.05, 0.45)
+	base_color_locked: false
+	paint_job_mask: "/vehicle/truck/upgrade/paintjob/paintjob_001.tobj"
+	alternate_uvset: true
+
+	# First color variant
+	color_variant[]: (0.25, 0.05, 0.45) # base_color
+	color_variant[]: (0.25, 0.05, 0.45) # mask_b_color
+	color_variant[]: (0.85, 0.85, 0.85) # mask_g_color
+	color_variant[]: (0.85, 0.65, 0.10) # mask_r_color
+}
+}
