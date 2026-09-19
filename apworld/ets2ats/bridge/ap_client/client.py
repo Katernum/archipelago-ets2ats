@@ -11,10 +11,15 @@ re-reading and diffing it. The save poller is read-only, so unlike Sync it never
 main-menu precondition or a confirmation prompt -- reading the wrong profile by mistake just
 misattributes a discovery, it can't corrupt anything.
 
-Must be run from within an Archipelago source checkout (needs CommonClient.py, NetUtils.py,
-worlds/ets2ats, etc. importable) -- this repo doesn't vendor them.
+Must be run from within an Archipelago installation with this world available (either the
+dev checkout via prototypes/sync_apworld.py, or a real installed .apworld) -- needs
+CommonClient.py, NetUtils.py, worlds/ets2ats, etc. importable, and this repo doesn't vendor
+them. bridge/ lives inside the apworld package (apworld/ets2ats/bridge/) precisely so it ships
+inside a real .apworld -- that means this module uses relative imports and can't be run as a
+bare script; run it as a module instead so those imports resolve:
 
-Usage: py client.py --connect localhost:38281
+Usage: py -m worlds.ets2ats.bridge.ap_client.client --connect localhost:38281
+       (from within an Archipelago checkout/install directory, or with it on PYTHONPATH)
 """
 
 from __future__ import annotations
@@ -24,10 +29,6 @@ import ctypes
 import json
 import sys
 from pathlib import Path
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
 import ModuleUpdate
 ModuleUpdate.update()
@@ -39,12 +40,12 @@ from worlds.ets2ats import GAME_NAME
 from worlds.ets2ats.items import MONEY_ITEM_VALUES, XP_ITEM_VALUES
 from worlds.ets2ats.locations import DISTANCE_MILESTONES_KM, LOCATION_NAME_TO_ID, XP_MILESTONES
 
-from bridge.overlay.ui import UI
-from bridge.sync import profile_paths
-from bridge.sync.apply_items import apply_deltas
-from bridge.sync.save_poller import read_tracked_fields
-from bridge.telemetry.shared_memory_map import MMF_NAME, MMF_SIZE, ScsTelemetryMap
-from bridge.telemetry.win_mmf import ExistingFileMapping
+from ..overlay.ui import UI
+from ..sync import profile_paths
+from ..sync.apply_items import apply_deltas
+from ..sync.save_poller import read_tracked_fields
+from ..telemetry.shared_memory_map import MMF_NAME, MMF_SIZE, ScsTelemetryMap
+from ..telemetry.win_mmf import ExistingFileMapping
 
 TELEMETRY_POLL_HZ = 10
 SAVE_POLL_SECONDS = 20

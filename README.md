@@ -29,10 +29,11 @@ checks are detected and shown live, items are queued and applied in player-paced
 
 ## Repo layout
 
-- `apworld/` — the Archipelago World definition (Python)
-- `bridge/` — the standalone bridge process (telemetry reader, AP client, save/mod-data writer,
-  restart automation, overlay UI)
-- `content-mod/` — companion `.scs` mod source supplying AP-exclusive shop items
+- `apworld/ets2ats/` — the Archipelago World definition (Python), including:
+  - `apworld/ets2ats/bridge/` — the standalone bridge process (telemetry reader, AP client,
+    save/mod-data writer, overlay UI). Lives inside the world package itself (not a sibling
+    folder) so it ships inside the real packaged `.apworld` — see docs/design-decisions.md.
+- `content-mod/` — companion `.scs` mod source supplying always-purchasable cosmetic content
 - `prototypes/` — throwaway spike scripts, not shipped
 - `docs/` — design notes
 
@@ -41,6 +42,7 @@ checks are detected and shown live, items are queued and applied in player-paced
 - Python 3.11.9–3.13 (matches Archipelago's supported range). On this machine, invoke via `py`,
   not `python` (the bare `python` command resolves to the Windows Store stub alias).
 - `pip install -r requirements.txt` for `bridge/`'s own dependencies (save-file crypto,
-  telemetry, tray/overlay UI). Running `bridge/ap_client/client.py` also needs a separate
-  Archipelago source checkout on `PYTHONPATH` for `CommonClient.py`/`worlds/` — see
-  docs/design-decisions.md.
+  telemetry, tray/overlay UI). Running the client directly (outside the Archipelago Launcher)
+  also needs a separate Archipelago installation/checkout, and since `bridge/` is a nested
+  package now, it must be run as a module, not a bare script:
+  `py -m worlds.ets2ats.bridge.ap_client.client --connect ...` — see docs/design-decisions.md.

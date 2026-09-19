@@ -15,7 +15,7 @@ prototypes/samples/
 config.cfg.pre-ap-edit-*
 
 # Runtime state, not source
-bridge/ap_client/client_state.json
+apworld/ets2ats/bridge/ap_client/client_state.json
 
 # Build output, not source
 content-mod/dist/

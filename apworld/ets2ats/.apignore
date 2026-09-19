@@ -1,0 +1,2 @@
+# Per-installation runtime state, not source -- see .gitignore for the same exclusion.
+bridge/ap_client/client_state.json

@@ -7,8 +7,6 @@ pure plumbing/placeholder content.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from typing import Any
 
 from BaseClasses import ItemClassification, Region
@@ -37,19 +35,11 @@ from .locations import (
 from .options import Ets2AtsOptions
 from .rules import set_rules
 
-# Dev-only: prototypes/sync_apworld.py drops this marker when copying this folder into an
-# Archipelago checkout, so `launch_client` below can find bridge/ next door in this repo
-# instead of inside the packaged world (see docs/design-decisions.md). A real packaged
-# .apworld has no marker -- bridge/'s code would need to be bundled inside it instead.
-_dev_repo_root = Path(__file__).parent / "_dev_repo_root.txt"
-if _dev_repo_root.exists():
-    repo_root = _dev_repo_root.read_text().strip()
-    if repo_root not in sys.path:
-        sys.path.insert(0, repo_root)
-
 
 def launch_client(*args: str) -> None:
-    from bridge.ap_client.client import launch
+    # bridge/ lives inside this package now (apworld/ets2ats/bridge/) so it ships inside the
+    # real .apworld -- no sys.path tricks needed, this is just a normal nested import.
+    from .bridge.ap_client.client import launch
     launch_component(launch, name="ETS2ATS Client", args=args)
 
 

@@ -2,6 +2,55 @@
 
 Findings from feasibility research, preserved here so they don't only live in chat history.
 
+## Real packaging: bridge/ moved inside the apworld, a real .apworld confirmed working
+
+Closes out a caveat flagged all the way back in Milestone 5: `bridge/` lived as a sibling
+folder to `apworld/`, which only worked because our dev loop used a `_dev_repo_root.txt`
+marker to put it on `sys.path` -- a real player's Archipelago install has no such sibling
+folder, so this needed fixing before the project could be considered actually usable rather
+than only runnable inside this dev setup.
+
+**The move**: `bridge/` -> `apworld/ets2ats/bridge/`, a real subpackage now. Within each
+`bridge/` subpackage, cross-file imports were already relative (`from . import sii_crypto`
+etc.) -- only `client.py`'s six cross-subpackage imports (`from bridge.overlay...`, `from
+bridge.sync...`, `from bridge.telemetry...`) needed changing, to `from ..overlay...` etc.
+`apworld/ets2ats/__init__.py`'s `launch_client` changed from `from bridge.ap_client.client
+import launch` to `from .bridge.ap_client.client import launch`, and the whole
+`_dev_repo_root.txt`/sys.path shim (both the reading code here and the writing code in
+`prototypes/sync_apworld.py`) was deleted outright -- no longer needed once bridge is a
+genuine nested package. One real consequence: `client.py` uses relative imports now, so it
+can no longer be run as a bare script (`py client.py`) -- run it as a module instead:
+`py -m worlds.ets2ats.bridge.ap_client.client --connect ...`.
+
+**The `.apworld` format itself**, confirmed directly from Archipelago's own "Build APWorlds"
+Launcher component (`worlds/LauncherComponents.py`) rather than assumed: a zip file
+containing one top-level directory named after the world's module, holding `__init__.py`
+plus everything else (filtered by a global default `.apignore` plus an optional world-local
+one), plus a generated `archipelago.json` manifest. Added `apworld/ets2ats/.apignore` to
+exclude `bridge/ap_client/client_state.json` (per-installation runtime state, not source).
+
+**One real bug caught by testing this properly, not just trusting it should work**: the
+first packaged `.apworld` failed immediately on the Launcher component with
+`ModuleNotFoundError: No module named 'worlds.ets2ats.bridge'`, despite the exact same code
+working fine synced into a loose directory in the dev checkout. Root cause: `bridge/`
+itself never had its own `__init__.py` (every subpackage under it did, but the `bridge`
+folder was originally just a `sys.path` root, never itself imported as a package). Python's
+implicit namespace packages let a directory without `__init__.py` work fine when found on a
+real filesystem -- which is exactly why the dev-checkout tests all passed -- but `zipimport`
+(how Archipelago loads code directly out of a `.apworld` zip, which is what a real install
+actually does) does not support implicit namespace packages the same way and needs an
+explicit `__init__.py` to recognize a directory as a package. Fixed by adding one. Lesson
+worth keeping: a loose-directory dev test passing is not proof a real zip-packaged install
+will work -- the two import mechanisms have different rules, and only testing against a real
+built `.apworld` would have caught this.
+
+**Confirmed working end to end via a genuine isolation test**, not just re-running the dev
+loop: renamed the dev checkout's `worlds/ets2ats` out of the way entirely, installed only the
+built `.apworld` into `custom_worlds/`, and confirmed both `Generate.py` (698 items, matching
+every prior run exactly) and the Launcher-invoked client (connected, authenticated, joined)
+worked with zero dev scaffolding present -- no sibling `bridge/` folder, no sys.path tricks,
+nothing but the packaged file itself.
+
 ## Reliability bug: telemetry silently reading a dead mapping after a game restart
 
 Caught during Milestone 6 live testing. A player delivered a job (including a ferry leg) that
