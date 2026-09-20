@@ -82,6 +82,41 @@ directions counts as two distinct routes toward the milestone. Deliberate simpli
 an oversight: it still requires genuinely using the crossing (a round trip), just doesn't
 bother normalizing direction.
 
+### Cheeky rolling-window challenges
+
+Two more, per player request for something more tongue-in-cheek: a speeding spree, and a
+sudden-crash detector.
+
+| Location | Trigger |
+|---|---|
+| 5 Speeding Fines in 1 Minute | 5 fines with `fine_offence` of `speeding` or `speeding_camera` within a rolling 60s window |
+| 50% Damage in 30 Seconds | `max(wearChassis, wearCabin)` increasing by >= 0.5 within a rolling 30s window |
+
+Two things confirmed against real sources before building, not assumed:
+
+- **`fine_offence` values are documented in SCS's own SDK header**
+  (`scssdk_telemetry_common_gameplay_events.h`): `crash`, `avoid_sleeping`, `wrong_way`,
+  `speeding_camera`, `no_lights`, `red_signal`, `speeding`, `avoid_weighing`,
+  `illegal_trailer`, `avoid_inspection`, `illegal_border_crossing`,
+  `hard_shoulder_violation`, `damaged_vehicle_usage`, `generic`. Both `speeding` (police-
+  issued) and `speeding_camera` (fixed camera) count toward the challenge -- same underlying
+  violation, two ways to get caught.
+- **Damage uses chassis/cabin wear specifically, not all five wear components.** Engine,
+  transmission, and wheel wear accumulate gradually from normal use and overheating; only
+  chassis and cabin wear actually spike from a collision, which is what "sudden 50% damage"
+  is meant to capture. Using an average across all five would dilute a real crash with
+  unrelated mechanical wear.
+
+Rolling windows use wall-clock time (`time.monotonic()` in the bridge client), not the
+telemetry clock -- these only need to be roughly right, not frame-accurate, and monotonic
+time sidesteps the whole `paused`/staleness question that complicated the telemetry-clock
+heuristic elsewhere (see docs/design-decisions.md). The windows themselves are deliberately
+**not persisted** across a client restart, unlike most other check-detection state: a lost
+30-60 second window on the rare occasion of a restart is a low-cost, acceptable edge case,
+unlike `delivery_count` where losing state caused a real permanent gap (see
+docs/design-decisions.md's third bug write-up). Only the "already achieved" flag for each
+is persisted, so a completed challenge doesn't need re-detecting.
+
 ## Items
 
 | Item | Effect | Mechanism |

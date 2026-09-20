@@ -50,6 +50,20 @@ FERRY_ONEOFF_LOCATION = "Take a Ferry"
 TRAIN_ONEOFF_LOCATION = "Take a Train"
 MAJOR_FINE_LOCATION = "Get a Major Fine"
 
+# Cheeky rolling-window challenges, per player request. Fine offence type confirmed against
+# SCS's own SDK header (scssdk_telemetry_common_gameplay_events.h) -- "speeding" and
+# "speeding_camera" are both real, documented fine_offence values (others include crash,
+# wrong_way, red_signal, etc.), not guessed. Damage uses chassis/cabin wear specifically
+# (not engine/transmission, which accumulate from normal use and overheating, not collisions)
+# since those are the two components that actually spike from a crash.
+SPEEDING_OFFENCE_TYPES = {"speeding", "speeding_camera"}
+SPEEDING_SPREE_COUNT = 5
+SPEEDING_SPREE_WINDOW_SECONDS = 60.0
+SPEEDING_SPREE_LOCATION = "5 Speeding Fines in 1 Minute"
+SUDDEN_DAMAGE_THRESHOLD = 0.5
+SUDDEN_DAMAGE_WINDOW_SECONDS = 30.0
+SUDDEN_DAMAGE_LOCATION = "50% Damage in 30 Seconds"
+
 VICTORY_LOCATION = "Victory"
 
 DELIVERY_LOCATIONS = [f"Delivery #{n}" for n in range(1, MAX_DELIVERY_LOCATIONS + 1)]
@@ -67,7 +81,8 @@ TRAIN_ROUTE_LOCATIONS = [f"{n} Different Train Routes" for n in TRAIN_ROUTE_MILE
 ALL_LOCATIONS = (
     DELIVERY_LOCATIONS + CITY_DISCOVERED_LOCATIONS + DEALER_UNLOCKED_LOCATIONS
     + DISTANCE_LOCATIONS + XP_LOCATIONS
-    + [FERRY_ONEOFF_LOCATION, TRAIN_ONEOFF_LOCATION, MAJOR_FINE_LOCATION]
+    + [FERRY_ONEOFF_LOCATION, TRAIN_ONEOFF_LOCATION, MAJOR_FINE_LOCATION,
+       SPEEDING_SPREE_LOCATION, SUDDEN_DAMAGE_LOCATION]
     + TOLLGATE_LOCATIONS + REFUEL_COUNT_LOCATIONS + FUEL_VOLUME_LOCATIONS
     + FERRY_ROUTE_LOCATIONS + TRAIN_ROUTE_LOCATIONS
 )

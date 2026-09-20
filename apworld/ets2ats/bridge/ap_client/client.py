@@ -28,6 +28,7 @@ import asyncio
 import ctypes
 import json
 import sys
+import time
 from pathlib import Path
 
 import ModuleUpdate
@@ -47,6 +48,13 @@ from worlds.ets2ats.locations import (
     MAJOR_FINE_LOCATION,
     MAJOR_FINE_THRESHOLD,
     REFUEL_COUNT_MILESTONES,
+    SPEEDING_OFFENCE_TYPES,
+    SPEEDING_SPREE_COUNT,
+    SPEEDING_SPREE_LOCATION,
+    SPEEDING_SPREE_WINDOW_SECONDS,
+    SUDDEN_DAMAGE_LOCATION,
+    SUDDEN_DAMAGE_THRESHOLD,
+    SUDDEN_DAMAGE_WINDOW_SECONDS,
     TOLLGATE_MILESTONES,
     TRAIN_ONEOFF_LOCATION,
     TRAIN_ROUTE_MILESTONES,
@@ -115,6 +123,15 @@ class Ets2AtsContext(CommonContext):
         self.train_routes_seen: set[tuple[str, str]] = {tuple(pair) for pair in state["train_routes_seen"]}
         self.train_route_milestones_sent: set[int] = set(state["train_route_milestones_sent"])
         self.major_fine_sent: bool = state["major_fine_sent"]
+        # Cheeky rolling-window challenges. The windows themselves (speeding_fine_times,
+        # damage_samples) are deliberately NOT persisted -- these are short (30-60s) windows,
+        # so a client restart naturally resetting them is an acceptable, low-cost edge case,
+        # unlike delivery_count/cumulative_distance_km above where losing state caused a real
+        # permanent gap. Only the "already achieved" flags need persisting.
+        self.speeding_fine_times: list[float] = []
+        self.speeding_spree_sent: bool = state["speeding_spree_sent"]
+        self.damage_samples: list[tuple[float, float]] = []
+        self.sudden_damage_sent: bool = state["sudden_damage_sent"]
         # How many of self.items_received (CommonContext's own authoritative, reconnect-safe
         # list) have already been applied to a save via Sync. Deliberately NOT a list of item
         # names we append to ourselves -- the server resends a player's FULL item history on
@@ -158,6 +175,8 @@ class Ets2AtsContext(CommonContext):
             "train_routes_seen": [],
             "train_route_milestones_sent": [],
             "major_fine_sent": False,
+            "speeding_spree_sent": False,
+            "sudden_damage_sent": False,
         }
         if CLIENT_STATE_FILE.exists():
             defaults.update(json.loads(CLIENT_STATE_FILE.read_text()))
@@ -185,6 +204,8 @@ class Ets2AtsContext(CommonContext):
             "train_routes_seen": sorted(list(pair) for pair in self.train_routes_seen),
             "train_route_milestones_sent": sorted(self.train_route_milestones_sent),
             "major_fine_sent": self.major_fine_sent,
+            "speeding_spree_sent": self.speeding_spree_sent,
+            "sudden_damage_sent": self.sudden_damage_sent,
         }))
 
     def pending_item_names(self) -> list[str]:
@@ -487,7 +508,42 @@ async def telemetry_watcher(ctx: Ets2AtsContext) -> None:
                 ctx.major_fine_sent = True
                 await _fire_check(ctx, MAJOR_FINE_LOCATION, f"${fine_amount:,}")
                 ctx.save_client_state()
+
+            # Cheeky: 5 speeding fines within a rolling 1-minute window. fine_offence values
+            # ("speeding", "speeding_camera", "crash", "wrong_way", etc.) are documented in
+            # SCS's own SDK header, not guessed. Uses wall-clock time, not the telemetry
+            # clock, since this window only needs to be roughly right, not frame-accurate.
+            offence = _cstr(snap.gameplay_s.fineOffence)
+            if offence in SPEEDING_OFFENCE_TYPES and not ctx.speeding_spree_sent:
+                now = time.monotonic()
+                ctx.speeding_fine_times.append(now)
+                ctx.speeding_fine_times = [
+                    t for t in ctx.speeding_fine_times if now - t <= SPEEDING_SPREE_WINDOW_SECONDS
+                ]
+                if len(ctx.speeding_fine_times) >= SPEEDING_SPREE_COUNT:
+                    ctx.speeding_spree_sent = True
+                    await _fire_check(ctx, SPEEDING_SPREE_LOCATION)
+                    ctx.save_client_state()
         prev_fined = fined
+
+        # Cheeky: 50% (chassis or cabin) wear appearing within a rolling 30-second window --
+        # a big, sudden crash, not gradual mechanical wear. Deliberately excludes
+        # engine/transmission wear (those accumulate from normal use and overheating, not
+        # collisions) and runs every tick, not on an edge, since wear changes continuously
+        # rather than firing a discrete event like the others above.
+        if not ctx.sudden_damage_sent:
+            crash_wear = max(snap.truck_f.wearChassis, snap.truck_f.wearCabin)
+            now = time.monotonic()
+            ctx.damage_samples.append((now, crash_wear))
+            ctx.damage_samples = [
+                (t, w) for t, w in ctx.damage_samples if now - t <= SUDDEN_DAMAGE_WINDOW_SECONDS
+            ]
+            if ctx.damage_samples:
+                window_min = min(w for _t, w in ctx.damage_samples)
+                if crash_wear - window_min >= SUDDEN_DAMAGE_THRESHOLD:
+                    ctx.sudden_damage_sent = True
+                    await _fire_check(ctx, SUDDEN_DAMAGE_LOCATION, f"+{(crash_wear - window_min) * 100:.0f}%")
+                    ctx.save_client_state()
 
         await asyncio.sleep(1.0 / TELEMETRY_POLL_HZ)
 

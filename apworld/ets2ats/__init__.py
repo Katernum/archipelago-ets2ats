@@ -32,6 +32,8 @@ from .locations import (
     LOCATION_NAME_TO_ID,
     MAJOR_FINE_LOCATION,
     REFUEL_COUNT_LOCATIONS,
+    SPEEDING_SPREE_LOCATION,
+    SUDDEN_DAMAGE_LOCATION,
     TOLLGATE_LOCATIONS,
     TRAIN_ONEOFF_LOCATION,
     TRAIN_ROUTE_LOCATIONS,
@@ -91,7 +93,8 @@ class Ets2AtsWorld(World):
         dealer_names = [f"Dealer Unlocked: {name}" for name in active_cities.values()]
         active_names = (
             delivery_names + city_names + dealer_names + DISTANCE_LOCATIONS + XP_LOCATIONS
-            + [FERRY_ONEOFF_LOCATION, TRAIN_ONEOFF_LOCATION, MAJOR_FINE_LOCATION]
+            + [FERRY_ONEOFF_LOCATION, TRAIN_ONEOFF_LOCATION, MAJOR_FINE_LOCATION,
+               SPEEDING_SPREE_LOCATION, SUDDEN_DAMAGE_LOCATION]
             + TOLLGATE_LOCATIONS + REFUEL_COUNT_LOCATIONS + FUEL_VOLUME_LOCATIONS
             + FERRY_ROUTE_LOCATIONS + TRAIN_ROUTE_LOCATIONS
         )
